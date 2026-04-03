@@ -28,15 +28,8 @@ export default defineBackground(() => {
     }
 
     if (msg.type === 'CHECK_FEATURES') {
-      browser.storage.local.get(['floq_tier', 'floq_features', 'floq_last_heartbeat']).then(data => {
-        // If heartbeat is older than 30 minutes, fall back to floor tier for safety
-        const stale = !data.floq_last_heartbeat || (Date.now() - data.floq_last_heartbeat > 30 * 60 * 1000);
-        if (stale) {
-          sendResponse({ tier: 'floor', features: getTierFeatures('floor') });
-        } else {
-          sendResponse({ tier: data.floq_tier || 'floor', features: data.floq_features || getTierFeatures('floor') });
-        }
-      }).catch(() => sendResponse({ tier: 'floor', features: getTierFeatures('floor') }));
+      // Demo build: always return group tier with all features unlocked
+      sendResponse({ tier: 'group', features: getTierFeatures('group') });
       return true;
     }
 
@@ -201,10 +194,8 @@ export default defineBackground(() => {
       });
       if (resp.ok) {
         const data = await resp.json();
-        // Store tier + features from heartbeat response for feature gating
-        if (data.tier) {
-          await browser.storage.local.set({ floq_tier: data.tier, floq_features: data.features || {}, floq_last_heartbeat: Date.now() });
-        }
+        // Demo build: always store group tier regardless of server response
+        await browser.storage.local.set({ floq_tier: 'group', floq_features: getTierFeatures('group'), floq_last_heartbeat: Date.now() });
       }
     } catch(e) {
       // Heartbeat failed — report error silently

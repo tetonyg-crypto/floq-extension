@@ -92,13 +92,14 @@ export default defineContentScript({
     let sidebarOpen = false;
     let sidebarRoot: HTMLElement | null = null;
     let isGenerating = false;
-    let currentTier = 'floor';
+    let currentTier = 'group'; // Demo build: everything unlocked
 
     async function getTier(): Promise<string> {
-      try { const resp = await browser.runtime.sendMessage({ type: 'CHECK_FEATURES' }); currentTier = resp?.tier || 'floor'; return currentTier; } catch(e) { return 'floor'; }
+      currentTier = 'group';
+      return 'group';
     }
-    async function isFeatureUnlocked(feature: string): Promise<boolean> {
-      try { const resp = await browser.runtime.sendMessage({ type: 'CHECK_FEATURES' }); return resp?.features?.[feature] || false; } catch(e) { return true; }
+    async function isFeatureUnlocked(_feature: string): Promise<boolean> {
+      return true; // Demo build: all features unlocked
     }
 
     // ===== VINSOLUTIONS SCANNING =====
@@ -436,20 +437,17 @@ export default defineContentScript({
         settingsBack.onclick = () => { settingsPanel!.style.display = 'none'; s.getElementById('o8-quick')!.style.display = 'flex'; };
       }
 
-      // FIX 7: Settings tone/goal radio buttons (Command+ only)
-      if (currentTier !== 'floor') {
-        s.querySelectorAll('input[name="floq-tone"]').forEach(radio => {
-          radio.addEventListener('change', () => { browser.storage.local.set({ floq_tone: (radio as HTMLInputElement).value }); });
-        });
-        s.querySelectorAll('input[name="floq-goal"]').forEach(radio => {
-          radio.addEventListener('change', () => { browser.storage.local.set({ floq_goal: (radio as HTMLInputElement).value }); });
-        });
-        // Load saved values
-        browser.storage.local.get(['floq_tone', 'floq_goal']).then(r => {
-          if (r.floq_tone) { const el = s.querySelector(`input[name="floq-tone"][value="${r.floq_tone}"]`) as HTMLInputElement; if (el) el.checked = true; }
-          if (r.floq_goal) { const el = s.querySelector(`input[name="floq-goal"][value="${r.floq_goal}"]`) as HTMLInputElement; if (el) el.checked = true; }
-        });
-      }
+      // Settings tone/goal radio buttons — all unlocked
+      s.querySelectorAll('input[name="floq-tone"]').forEach(radio => {
+        radio.addEventListener('change', () => { browser.storage.local.set({ floq_tone: (radio as HTMLInputElement).value }); });
+      });
+      s.querySelectorAll('input[name="floq-goal"]').forEach(radio => {
+        radio.addEventListener('change', () => { browser.storage.local.set({ floq_goal: (radio as HTMLInputElement).value }); });
+      });
+      browser.storage.local.get(['floq_tone', 'floq_goal']).then(r => {
+        if (r.floq_tone) { const el = s.querySelector(`input[name="floq-tone"][value="${r.floq_tone}"]`) as HTMLInputElement; if (el) el.checked = true; }
+        if (r.floq_goal) { const el = s.querySelector(`input[name="floq-goal"][value="${r.floq_goal}"]`) as HTMLInputElement; if (el) el.checked = true; }
+      });
 
       // Tools panel
       const toolsPanel = s.getElementById('o8-tools-panel');
@@ -484,7 +482,6 @@ export default defineContentScript({
       const coachBtn = s.getElementById('o8-coach-btn');
       if (coachBtn) {
         coachBtn.addEventListener('click', async () => {
-          if (currentTier === 'floor') return;
           const input = coachInput?.value.trim(); if (!input) return;
           coachBtn.textContent = 'Thinking...'; (coachBtn as any).disabled = true;
           try {
@@ -610,10 +607,7 @@ export default defineContentScript({
     // ===== GENERATE =====
     async function doGenerate(s: ShadowRoot) {
       if (isGenerating) return; isGenerating = true;
-      if (isGmail || isFacebook || isLinkedIn || isInstagram) {
-        const featureKey = isGmail ? 'gmail' : isFacebook ? 'facebook' : isInstagram ? 'facebook' : 'linkedin';
-        if (!(await isFeatureUnlocked(featureKey))) { const out = s.getElementById('o8-outputs'); if (out) out.innerHTML = '<div class="gate-card">This feature is available on your dealership\'s Floq plan. Contact your manager to unlock it.</div>'; isGenerating = false; return; }
-      }
+      // Demo build: no platform feature gates
       const input = (s.getElementById('o8-input') as HTMLTextAreaElement).value.trim();
       if (!input && !leadData?.customerName) { isGenerating = false; return; }
       const chips = s.querySelectorAll('.chip.on');
@@ -816,24 +810,10 @@ export default defineContentScript({
       }
     }
 
-    function gateCard(name: string, desc: string): string {
-      return `<div class="gate-card"><div class="gate-icon">🔒</div><div class="gate-title">${esc(name)}</div><div class="gate-desc">${esc(desc)}</div><div class="gate-unlock">Ask your manager to unlock this feature</div></div>`;
-    }
-    const GATE_COACH = gateCard('Coach', 'Objection handler. Tell Coach what the customer just said and get the perfect response for price, trade, financing, or timing objections.');
-    const GATE_CONTEXT = gateCard('Context', 'Screenshot reader. Drop in any conversation screenshot and Floq reads it and writes the reply.');
-    const GATE_COMMAND = gateCard('Command', 'Advanced mode. Direct AI instructions for complex deal situations, multi-touch campaigns, and custom outputs.');
+    // Demo build: no gate cards — all features unlocked
 
-    // ===== FIX 7: SETTINGS HTML =====
+    // Settings HTML — all unlocked (demo build)
     function getSettingsHTML(): string {
-      if (currentTier === 'floor') {
-        return `<div class="settings-section">
-          <div class="settings-label">Tone</div>
-          <div class="settings-options locked"><label><input type="radio" disabled checked> Professional</label><label><input type="radio" disabled> Friendly</label><label><input type="radio" disabled> Casual</label><label><input type="radio" disabled> Direct</label><div class="lock-overlay">🔒 Ask your manager to upgrade</div></div>
-          <div class="settings-label">Goal</div>
-          <div class="settings-options locked"><label><input type="radio" disabled checked> Close the deal</label><label><input type="radio" disabled> Book appointment</label><label><input type="radio" disabled> Gather info</label><label><input type="radio" disabled> Nurture long-term</label><div class="lock-overlay">🔒 Ask your manager to upgrade</div></div>
-          <div class="upgrade-banner">Your dealership hasn't unlocked this feature yet. Ask your manager about upgrading your Floq plan.</div>
-        </div>`;
-      }
       return `<div class="settings-section">
         <div class="settings-label">Tone</div>
         <div class="settings-options"><label><input type="radio" name="floq-tone" value="professional" checked> Professional</label><label><input type="radio" name="floq-tone" value="friendly"> Friendly</label><label><input type="radio" name="floq-tone" value="casual"> Casual</label><label><input type="radio" name="floq-tone" value="direct"> Direct</label></div>
@@ -844,7 +824,6 @@ export default defineContentScript({
 
     function getHTML(): string {
       const badge = getBadge();
-      const isFloor = currentTier === 'floor';
       const customerCard = isVinSolutions ? `<div id="o8-card" class="card" style="display:none"><div id="o8-name" class="name"></div><div id="o8-vehicle" class="vehicle"></div><div id="o8-meta" class="meta"></div></div>` : '';
       const placeholder = isVinSolutions ? 'Describe the situation or tap the mic...' : isGmail ? 'Describe the email situation...' : isFacebook ? 'Describe the conversation...' : isLinkedIn ? 'Describe the LinkedIn interaction...' : isInstagram ? 'Describe the DM...' : 'Describe the situation...';
 
@@ -879,10 +858,10 @@ export default defineContentScript({
     <button class="tool-tab-btn" data-tool="context">Context</button>
     <button class="tool-tab-btn" data-tool="command">Command</button>
   </div>
-  <div id="tool-coach" class="tool-content" style="display:block">${isFloor ? GATE_COACH : `<div class="tool-section"><div class="input-wrap"><textarea id="o8-coach-input" class="main-input" placeholder="What did the customer just say?" rows="2"></textarea><button id="o8-coach-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><div class="coach-chips"><button class="coach-chip">Need to think about it</button><button class="coach-chip">Price too high</button><button class="coach-chip">Bad credit</button><button class="coach-chip">Spouse not here</button></div><button id="o8-coach-btn" class="gen-btn">Coach Me</button></div><div id="o8-coach-output" class="tool-output"></div>`}</div>
+  <div id="tool-coach" class="tool-content" style="display:block"><div class="tool-section"><div class="input-wrap"><textarea id="o8-coach-input" class="main-input" placeholder="What did the customer just say?" rows="2"></textarea><button id="o8-coach-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><div class="coach-chips"><button class="coach-chip">Need to think about it</button><button class="coach-chip">Price too high</button><button class="coach-chip">Bad credit</button><button class="coach-chip">Spouse not here</button></div><button id="o8-coach-btn" class="gen-btn">Coach Me</button></div><div id="o8-coach-output" class="tool-output"></div></div>
   <div id="tool-alerts" class="tool-content" style="display:none"><div class="tool-section"><div class="input-wrap"><input id="o8-alert-input" class="main-input" placeholder="e.g. Move the Tacoma by noon" /><button id="o8-alert-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><button id="o8-alert-btn" class="gen-btn" style="background:#FF9500">Set Alert</button></div><div id="o8-alert-list" class="tool-output"></div></div>
-  <div id="tool-context" class="tool-content" style="display:none">${isFloor ? GATE_CONTEXT : `<div class="tool-section"><div id="o8-ctx-dropzone" class="ctx-dropzone"><span>Drop screenshot or paste (Ctrl+V)</span></div><div id="o8-ctx-preview" class="ctx-preview" style="display:none"><img id="o8-ctx-img" class="ctx-img" /><button id="o8-ctx-remove" class="ctx-remove">&times;</button></div><textarea id="o8-ctx-direction" class="main-input" placeholder="What do you want to say?" rows="2"></textarea><button id="o8-ctx-generate" class="gen-btn" disabled>Generate Reply</button></div><div id="o8-ctx-output" class="tool-output"></div>`}</div>
-  <div id="tool-command" class="tool-content" style="display:none">${isFloor ? GATE_COMMAND : `<div class="tool-section"><div class="input-wrap"><textarea id="o8-cmd-input" class="main-input" placeholder="Type a command..." rows="2"></textarea><button id="o8-cmd-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><button id="o8-cmd-execute" class="gen-btn">Execute</button></div><div id="o8-cmd-status" class="tool-output"></div>`}</div>
+  <div id="tool-context" class="tool-content" style="display:none"><div class="tool-section"><div id="o8-ctx-dropzone" class="ctx-dropzone"><span>Drop screenshot or paste (Ctrl+V)</span></div><div id="o8-ctx-preview" class="ctx-preview" style="display:none"><img id="o8-ctx-img" class="ctx-img" /><button id="o8-ctx-remove" class="ctx-remove">&times;</button></div><textarea id="o8-ctx-direction" class="main-input" placeholder="What do you want to say?" rows="2"></textarea><button id="o8-ctx-generate" class="gen-btn" disabled>Generate Reply</button></div><div id="o8-ctx-output" class="tool-output"></div></div>
+  <div id="tool-command" class="tool-content" style="display:none"><div class="tool-section"><div class="input-wrap"><textarea id="o8-cmd-input" class="main-input" placeholder="Type a command..." rows="2"></textarea><button id="o8-cmd-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><button id="o8-cmd-execute" class="gen-btn">Execute</button></div><div id="o8-cmd-status" class="tool-output"></div></div>
 </div>
 <div id="o8-settings-panel" class="tools-panel" style="display:none">
   <div class="tools-header"><button id="o8-settings-back" class="back-btn">← Back</button><span class="tools-title">Settings</span></div>
@@ -940,7 +919,6 @@ export default defineContentScript({
 .tool-section { display:flex; flex-direction:column; gap:8px; } .tool-output { padding:8px 0; }
 .tool-result { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; font-size:12px; line-height:1.6; margin-top:8px; }
 .coach-chips { display:flex; flex-wrap:wrap; gap:4px; } .coach-chip { padding:4px 10px; border-radius:14px; font-size:10px; font-weight:500; font-family:inherit; border:1px solid #e2e8f0; background:#f8fafc; color:#64748b; cursor:pointer; } .coach-chip:hover { border-color:#7F77DD; color:#7F77DD; background:#F0EFFF; }
-.gate-card { text-align:center; padding:20px 14px; } .gate-icon { font-size:20px; margin-bottom:6px; } .gate-title { font-size:13px; font-weight:700; margin-bottom:4px; } .gate-desc { font-size:11px; color:#64748b; line-height:1.5; margin-bottom:8px; } .gate-unlock { font-size:10px; color:#7F77DD; font-weight:600; }
 .inline-links { display:flex; align-items:center; justify-content:center; gap:6px; margin-top:8px; } .link-btn { background:none; border:none; color:#7F77DD; font-size:11px; font-weight:600; cursor:pointer; font-family:inherit; padding:2px 4px; } .link-btn:hover { text-decoration:underline; } .link-sep { color:#e2e8f0; font-size:11px; }
 .ctx-dropzone { border:2px dashed #7F77DD; border-radius:8px; background:#F0EFFF; padding:16px; text-align:center; font-size:11px; color:#7F77DD; display:flex; align-items:center; justify-content:center; min-height:60px; cursor:pointer; } .ctx-dropzone.dragover { background:#e8e4ff; }
 .ctx-preview { position:relative; text-align:center; margin-bottom:8px; } .ctx-img { max-width:180px; max-height:100px; border-radius:6px; border:1px solid #e2e8f0; } .ctx-remove { position:absolute; top:-6px; right:calc(50% - 96px); width:18px; height:18px; border-radius:50%; background:#FF3B30; color:#fff; border:none; font-size:11px; cursor:pointer; }
@@ -951,8 +929,6 @@ export default defineContentScript({
 /* Settings */
 .settings-section { padding:16px 14px; } .settings-label { font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; margin-top:12px; }
 .settings-options { display:flex; flex-direction:column; gap:6px; position:relative; } .settings-options label { font-size:12px; color:#1a202c; display:flex; align-items:center; gap:6px; } .settings-options input[type="radio"] { accent-color:#7F77DD; }
-.settings-options.locked { opacity:0.5; pointer-events:none; } .lock-overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; color:#7F77DD; pointer-events:auto; opacity:1; }
-.upgrade-banner { margin-top:16px; padding:12px; background:#F0EFFF; border:1px solid #7F77DD; border-radius:8px; font-size:11px; color:#534AB7; line-height:1.5; text-align:center; }
 `;
     }
 
