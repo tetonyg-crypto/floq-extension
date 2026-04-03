@@ -379,6 +379,28 @@ export default defineContentScript({
             }
           }
 
+          // Feature gate: context and voice tabs require Command+ tier
+          if (tab === 'context') {
+            const outputEl = s.getElementById('o8-ctx-output');
+            if (outputEl && !(await checkFeatureGate('context_reply', outputEl))) {
+              s.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+              s.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+              btn.classList.add('active');
+              s.getElementById('tab-context')?.classList.add('active');
+              return;
+            }
+          }
+          if (tab === 'voice') {
+            const outputEl = s.getElementById('o8-voice-output');
+            if (outputEl && !(await checkFeatureGate('voice_dictation', outputEl))) {
+              s.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+              s.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+              btn.classList.add('active');
+              s.getElementById('tab-voice')?.classList.add('active');
+              return;
+            }
+          }
+
           s.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
           s.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
           btn.classList.add('active');
@@ -386,6 +408,163 @@ export default defineContentScript({
           if (tab === 'alerts') loadAlerts(s);
         });
       });
+
+      // ===== CONTEXT TAB — Screenshot drop + paste =====
+      let contextImage: string | null = null;
+      const dropZone = s.getElementById('o8-ctx-dropzone');
+      const ctxPreview = s.getElementById('o8-ctx-preview');
+      const ctxImg = s.getElementById('o8-ctx-img') as HTMLImageElement;
+      const ctxDirection = s.getElementById('o8-ctx-direction') as HTMLTextAreaElement;
+      const ctxGenBtn = s.getElementById('o8-ctx-generate') as HTMLButtonElement;
+      const ctxOutput = s.getElementById('o8-ctx-output');
+
+      function setContextImage(dataUrl: string) {
+        contextImage = dataUrl;
+        if (ctxImg) ctxImg.src = dataUrl;
+        if (ctxPreview) ctxPreview.style.display = 'block';
+        if (dropZone) dropZone.style.display = 'none';
+        updateCtxBtn();
+      }
+      function clearContextImage() {
+        contextImage = null;
+        if (ctxPreview) ctxPreview.style.display = 'none';
+        if (dropZone) dropZone.style.display = 'flex';
+        updateCtxBtn();
+      }
+      function updateCtxBtn() {
+        if (ctxGenBtn) ctxGenBtn.disabled = !contextImage || !ctxDirection?.value.trim();
+      }
+
+      if (dropZone) {
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('dragover'); });
+        dropZone.addEventListener('drop', (e: any) => {
+          e.preventDefault(); dropZone.classList.remove('dragover');
+          const file = e.dataTransfer?.files?.[0];
+          if (file?.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = () => setContextImage(reader.result as string);
+            reader.readAsDataURL(file);
+          }
+        });
+      }
+      // Clipboard paste handler for context tab
+      document.addEventListener('paste', (e: any) => {
+        if (!s.getElementById('tab-context')?.classList.contains('active')) return;
+        const item = e.clipboardData?.items?.[0];
+        if (item?.type.startsWith('image/')) {
+          const blob = item.getAsFile();
+          if (blob) {
+            const reader = new FileReader();
+            reader.onload = () => setContextImage(reader.result as string);
+            reader.readAsDataURL(blob);
+          }
+        }
+      });
+      if (s.getElementById('o8-ctx-remove')) {
+        s.getElementById('o8-ctx-remove')!.addEventListener('click', clearContextImage);
+      }
+      if (ctxDirection) ctxDirection.addEventListener('input', updateCtxBtn);
+
+      if (ctxGenBtn) {
+        ctxGenBtn.addEventListener('click', async () => {
+          if (!contextImage || !ctxDirection?.value.trim()) return;
+          ctxGenBtn.textContent = 'Analyzing...'; ctxGenBtn.disabled = true; ctxGenBtn.style.background = '#94a3b8';
+          if (ctxOutput) ctxOutput.innerHTML = '';
+          try {
+            const resp = await browser.runtime.sendMessage({
+              type: 'CONTEXT_REPLY',
+              payload: { image: contextImage, direction: ctxDirection.value.trim() }
+            });
+            if (resp.error) {
+              addOutput(s, 'Error', resp.error, 'o8-ctx-output');
+            } else {
+              if (resp.platform) addOutput(s, 'PLATFORM', resp.platform, 'o8-ctx-output');
+              if (resp.customer_intent) addOutput(s, 'CUSTOMER INTENT', resp.customer_intent, 'o8-ctx-output');
+              addOutput(s, 'REPLY', resp.reply || resp.raw || '', 'o8-ctx-output');
+            }
+          } catch(e: any) {
+            addOutput(s, 'Error', e.message, 'o8-ctx-output');
+          }
+          ctxGenBtn.textContent = '📸 Generate Reply'; ctxGenBtn.disabled = false; ctxGenBtn.style.background = '#7F77DD';
+          updateCtxBtn();
+        });
+      }
+
+      // ===== VOICE TAB — Push-to-talk =====
+      let voiceRecognition: any = null;
+      let voiceActive = false;
+      const voiceMic = s.getElementById('o8-voice-mic');
+      const voiceLabel = s.getElementById('o8-voice-label');
+      const voiceTranscript = s.getElementById('o8-voice-transcript');
+      const voiceGenBtn = s.getElementById('o8-voice-generate') as HTMLButtonElement;
+      const voiceOutput = s.getElementById('o8-voice-output');
+
+      function startVoiceCapture() {
+        const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (!SR) { if (voiceLabel) voiceLabel.textContent = 'Voice not supported in this browser'; return; }
+        voiceRecognition = new SR();
+        voiceRecognition.continuous = false;
+        voiceRecognition.interimResults = true;
+        voiceRecognition.lang = 'en-US';
+        voiceActive = true;
+        if (voiceMic) voiceMic.classList.add('active');
+        if (voiceLabel) voiceLabel.textContent = 'Listening...';
+        if (voiceTranscript) { voiceTranscript.style.display = 'block'; voiceTranscript.textContent = ''; }
+
+        voiceRecognition.onresult = (e: any) => {
+          const transcript = Array.from(e.results).map((r: any) => r[0].transcript).join('');
+          if (voiceTranscript) voiceTranscript.textContent = transcript;
+        };
+        voiceRecognition.onend = () => {
+          voiceActive = false;
+          if (voiceMic) voiceMic.classList.remove('active');
+          if (voiceLabel) voiceLabel.textContent = 'Tap to talk again';
+          if (voiceTranscript?.textContent?.trim()) {
+            if (voiceGenBtn) voiceGenBtn.style.display = 'block';
+          }
+        };
+        voiceRecognition.onerror = () => {
+          voiceActive = false;
+          if (voiceMic) voiceMic.classList.remove('active');
+          if (voiceLabel) voiceLabel.textContent = 'Hold to talk';
+        };
+        voiceRecognition.start();
+      }
+
+      if (voiceMic) {
+        voiceMic.addEventListener('mousedown', startVoiceCapture);
+        voiceMic.addEventListener('mouseup', () => { if (voiceRecognition && voiceActive) voiceRecognition.stop(); });
+        voiceMic.addEventListener('touchstart', (e) => { e.preventDefault(); startVoiceCapture(); });
+        voiceMic.addEventListener('touchend', () => { if (voiceRecognition && voiceActive) voiceRecognition.stop(); });
+      }
+
+      if (voiceGenBtn) {
+        voiceGenBtn.addEventListener('click', async () => {
+          const transcript = voiceTranscript?.textContent?.trim();
+          if (!transcript) return;
+          voiceGenBtn.textContent = 'Generating...'; voiceGenBtn.disabled = true; voiceGenBtn.style.background = '#94a3b8';
+          if (voiceOutput) voiceOutput.innerHTML = '';
+          try {
+            const resp = await browser.runtime.sendMessage({
+              type: 'VOICE_REPLY',
+              payload: { transcription: transcript }
+            });
+            if (resp.error) {
+              addOutput(s, 'Error', resp.error, 'o8-voice-output');
+            } else {
+              const sec = resp.sections;
+              if (sec?.text) addOutput(s, 'TEXT', sec.text, 'o8-voice-output');
+              if (sec?.email) addOutput(s, 'EMAIL', sec.email, 'o8-voice-output');
+              if (sec?.crm) addOutput(s, 'CRM NOTE', sec.crm, 'o8-voice-output');
+              if (!sec?.text && !sec?.email && !sec?.crm) addOutput(s, 'OUTPUT', resp.text || '', 'o8-voice-output');
+            }
+          } catch(e: any) {
+            addOutput(s, 'Error', e.message, 'o8-voice-output');
+          }
+          voiceGenBtn.textContent = '✨ Generate Reply'; voiceGenBtn.disabled = false; voiceGenBtn.style.background = '#7F77DD';
+        });
+      }
 
       // ===== COACH CHIPS =====
       s.querySelectorAll('.coach-chip').forEach(chip => {
@@ -747,8 +926,8 @@ export default defineContentScript({
       }
     }
 
-    function addOutput(s: ShadowRoot, label: string, content: string) {
-      const container = s.getElementById('o8-outputs')!;
+    function addOutput(s: ShadowRoot, label: string, content: string, containerId: string = 'o8-outputs') {
+      const container = s.getElementById(containerId) || s.getElementById('o8-outputs')!;
       const card = document.createElement('div');
       card.className = 'out-card';
       const isCRM = label === 'CRM NOTE';
@@ -928,6 +1107,8 @@ export default defineContentScript({
         <button class="tab-btn active" data-tab="generate">✨ Generate</button>
         <button class="tab-btn" data-tab="coach">⚡ Coach</button>
         <button class="tab-btn" data-tab="alerts">🔔 Alerts</button>
+        <button class="tab-btn" data-tab="context">📸 Context</button>
+        <button class="tab-btn" data-tab="voice">🎤 Voice</button>
         <button class="tab-btn" data-tab="command">⚡ Command</button>
       </div>
       <div id="tab-generate" class="tab-content active">
@@ -979,8 +1160,44 @@ export default defineContentScript({
         </div>
         <div id="o8-alert-list" class="outputs" style="padding:10px 14px"></div>
       </div>
+      ${HTML_CONTEXT_TAB}
+      ${HTML_VOICE_TAB}
       ${HTML_COMMAND_TAB}
       <div class="sidebar-footer"><a id="o8-settings" class="settings-link" title="Profile Settings">&#9881; Settings</a></div>
+    `;
+
+    // ===== SHARED CONTEXT TAB HTML =====
+    const HTML_CONTEXT_TAB = `
+      <div id="tab-context" class="tab-content">
+        <div class="input-section">
+          <div id="o8-ctx-dropzone" class="ctx-dropzone">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7F77DD" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+            <span>Drop a screenshot or paste (Ctrl+V)</span>
+          </div>
+          <div id="o8-ctx-preview" class="ctx-preview" style="display:none">
+            <img id="o8-ctx-img" class="ctx-img" />
+            <button id="o8-ctx-remove" class="ctx-remove">&times;</button>
+          </div>
+          <textarea id="o8-ctx-direction" class="input" placeholder="What do you want to say? e.g. tell her yes it's available, ask when she can come in" rows="2"></textarea>
+          <button id="o8-ctx-generate" class="gen-btn" disabled>📸 Generate Reply</button>
+        </div>
+        <div id="o8-ctx-output" class="outputs"></div>
+      </div>
+    `;
+
+    // ===== SHARED VOICE TAB HTML =====
+    const HTML_VOICE_TAB = `
+      <div id="tab-voice" class="tab-content">
+        <div class="voice-section">
+          <button id="o8-voice-mic" class="voice-mic">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          </button>
+          <div id="o8-voice-label" class="voice-label">Hold to talk</div>
+          <div id="o8-voice-transcript" class="voice-transcript" contenteditable="true" style="display:none"></div>
+          <button id="o8-voice-generate" class="gen-btn" style="display:none">✨ Generate Reply</button>
+        </div>
+        <div id="o8-voice-output" class="outputs"></div>
+      </div>
     `;
 
     // ===== SHARED COMMAND TAB HTML =====
@@ -1025,6 +1242,8 @@ export default defineContentScript({
         <button class="tab-btn active" data-tab="generate">✨ Generate</button>
         <button class="tab-btn" data-tab="coach">⚡ Coach</button>
         <button class="tab-btn" data-tab="alerts">🔔 Alerts</button>
+        <button class="tab-btn" data-tab="context">📸 Context</button>
+        <button class="tab-btn" data-tab="voice">🎤 Voice</button>
         <button class="tab-btn" data-tab="command">⚡ Command</button>
       </div>
       <div id="tab-generate" class="tab-content active">
@@ -1065,6 +1284,8 @@ export default defineContentScript({
         </div>
         <div id="o8-alert-list" class="outputs" style="padding:10px 14px"></div>
       </div>
+      ${HTML_CONTEXT_TAB}
+      ${HTML_VOICE_TAB}
       ${HTML_COMMAND_TAB}
       <div class="sidebar-footer"><a id="o8-settings" class="settings-link" title="Profile Settings">&#9881; Settings</a></div>
     `;
@@ -1128,6 +1349,20 @@ export default defineContentScript({
       .tab-btn:hover { color:#475569; }
       .tab-content { display:none; flex-direction:column; flex:1; overflow:hidden; }
       .tab-content.active { display:flex; }
+
+      .ctx-dropzone { border:2px dashed #7F77DD; border-radius:8px; background:#F0EFFF; padding:20px; text-align:center; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:8px; font-size:11px; color:#7F77DD; margin-bottom:8px; transition:all .15s; min-height:80px; justify-content:center; }
+      .ctx-dropzone:hover, .ctx-dropzone.dragover { background:#e8e4ff; border-color:#534AB7; }
+      .ctx-preview { position:relative; margin-bottom:8px; text-align:center; }
+      .ctx-img { max-width:200px; max-height:120px; border-radius:6px; border:1px solid #e2e8f0; }
+      .ctx-remove { position:absolute; top:-6px; right:calc(50% - 106px); width:20px; height:20px; border-radius:50%; background:#FF3B30; color:#fff; border:none; font-size:12px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+
+      .voice-section { padding:20px 14px; text-align:center; }
+      .voice-mic { width:80px; height:80px; border-radius:50%; background:#7F77DD; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; margin:0 auto 12px; transition:all .15s; }
+      .voice-mic:hover { background:#534AB7; }
+      .voice-mic.active { background:#FF3B30; animation:pulse-mic 1s infinite; }
+      @keyframes pulse-mic { 0%,100% { transform:scale(1); } 50% { transform:scale(1.08); } }
+      .voice-label { font-size:13px; color:#636366; font-weight:500; margin-bottom:16px; }
+      .voice-transcript { background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:10px; font-size:12px; line-height:1.5; color:#1a202c; min-height:60px; max-height:120px; overflow-y:auto; margin:0 14px 8px; outline:none; text-align:left; }
 
       .coach-chips { display:flex; flex-wrap:wrap; gap:4px; margin:8px 0; }
       .coach-chip { padding:4px 10px; border-radius:14px; font-size:10px; font-weight:500; font-family:inherit; border:1px solid #e2e8f0; background:#f8fafc; color:#64748b; cursor:pointer; transition:all .15s; }

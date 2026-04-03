@@ -77,6 +77,26 @@ export default defineBackground(() => {
       return true;
     }
 
+    if (msg.type === 'CONTEXT_REPLY') {
+      handleContextReply(msg.payload)
+        .then(sendResponse)
+        .catch(err => {
+          reportError('API_ERROR', `ContextReply: ${err.message}`).catch(() => {});
+          sendResponse({ error: err.message });
+        });
+      return true;
+    }
+
+    if (msg.type === 'VOICE_REPLY') {
+      handleVoiceReply(msg.payload)
+        .then(sendResponse)
+        .catch(err => {
+          reportError('API_ERROR', `VoiceReply: ${err.message}`).catch(() => {});
+          sendResponse({ error: err.message });
+        });
+      return true;
+    }
+
     if (msg.type === 'OPEN_COMMAND_MODE') {
       browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
         if (tabs[0]?.id) {
@@ -389,6 +409,55 @@ async function handleCommand(payload: { command: string; currentUrl?: string; ve
   return data;
 }
 
+// ===== CONTEXT REPLY (screenshot vision) =====
+async function handleContextReply(payload: { image: string; direction: string }) {
+  const settings = await browser.storage.sync.get(['dealer_token', 'rep_name']);
+  const dealerToken = settings.dealer_token || '';
+  if (!dealerToken) throw new Error('No license key found.');
+
+  const resp = await fetch(`${PROXY_URL}/api/context-reply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      dealer_token: dealerToken,
+      image: payload.image,
+      direction: payload.direction,
+      rep_name: settings.rep_name || 'Unknown'
+    })
+  });
+
+  if (resp.status === 401) throw new Error('License invalid or expired.');
+  if (resp.status === 403) throw new Error('Context Reply requires Floq Command or Group tier.');
+  if (resp.status === 429) throw new Error('Too many requests. Wait a few seconds.');
+  if (!resp.ok) {
+    const errBody = await resp.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(errBody.error || `Error: ${resp.status}`);
+  }
+
+  return await resp.json();
+}
+
+// ===== VOICE REPLY (transcription → generate) =====
+async function handleVoiceReply(payload: { transcription: string }) {
+  const settings = await browser.storage.sync.get(['dealer_token']);
+  const { repName, dealership, contextBlock } = await buildRepContext();
+  const dealerToken = settings.dealer_token || '';
+  if (!dealerToken) throw new Error('No license key found.');
+
+  const voiceMessage = `[Voice dictation — clean up filler words and extract intent]\nRep said: "${payload.transcription}"\nGenerate a professional text message reply based on their intent. Keep it 2-3 sentences max.`;
+
+  const metadata = {
+    rep_name: repName,
+    workflow_type: 'voice_reply',
+    customer_name: null,
+    vehicle: null
+  };
+
+  const result = await generateViaProxy(dealerToken, `${contextBlock}\nRep: ${repName}\nDealership: ${dealership}\n\n${voiceMessage}`, 'voice', metadata);
+  const sections = parseSections(result.text);
+  return { text: result.text, sections };
+}
+
 // ===== ERROR REPORTING =====
 async function reportError(errorType: string, errorMessage: string) {
   try {
@@ -436,6 +505,8 @@ function getTierFeatures(tier: string) {
     linkedin: false,
     voice_coach: false,
     command_mode: false,
+    context_reply: false,
+    voice_dictation: false,
     campaigns: false,
     multi_location: false,
     owner_dashboard: false,
@@ -453,6 +524,8 @@ function getTierFeatures(tier: string) {
     base.linkedin = true;
     base.voice_coach = true;
     base.command_mode = true;
+    base.context_reply = true;
+    base.voice_dictation = true;
   }
 
   if (tier === 'group') {
