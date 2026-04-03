@@ -10,9 +10,10 @@ export default defineContentScript({
   matches: [
     '*://*.vinsolutions.com/*',
     '*://*.coxautoinc.com/*',
-    '*://www.facebook.com/*',
     '*://mail.google.com/*',
-    '*://www.linkedin.com/*'
+    '*://www.facebook.com/*',
+    '*://www.linkedin.com/*',
+    '*://web.whatsapp.com/*'
   ],
   allFrames: true,
   runAt: 'document_idle',

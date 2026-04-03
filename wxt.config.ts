@@ -3,11 +3,12 @@ import { defineConfig } from 'wxt';
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
-    name: 'Floq — AI Sales Assistant',
+    name: 'Floq — AI Sales Assistant for VinSolutions',
     short_name: 'Floq',
     version: '1.5.0',
     version_name: '1.5.0',
-    description: 'AI-powered sales execution for dealership reps. Generate texts, emails, and CRM notes in seconds. Command Mode: speak or type commands and Floq does the rest.',
+    description: 'AI writes the text, email, and CRM note inside VinSolutions. Every rep performs like your best one.',
+    homepage_url: 'https://floqsales.com',
     icons: {
       '16': 'icons/icon-16.png',
       '32': 'icons/icon-32.png',
@@ -23,7 +24,7 @@ export default defineConfig({
     permissions: ['activeTab', 'storage'],
     web_accessible_resources: [{
       resources: ['voice.html', 'oper8er-intercept.js'],
-      matches: ['*://*.vinsolutions.com/*', '*://*.coxautoinc.com/*', '*://www.facebook.com/*', '*://mail.google.com/*', '*://www.linkedin.com/*']
+      matches: ['*://*.vinsolutions.com/*', '*://*.coxautoinc.com/*', '*://mail.google.com/*', '*://www.facebook.com/*', '*://www.linkedin.com/*', '*://web.whatsapp.com/*']
     }],
     host_permissions: [
       '*://*.vinsolutions.com/*',
