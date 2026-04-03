@@ -193,28 +193,11 @@ export default defineContentScript({
       }, 2000);
     }
 
+    // Non-VinSolutions: only inject in top frame
     if (!isVinSolutions && window !== window.top) return;
+    // VinSolutions: PILL ONLY IN TOP FRAME — scanning runs in iframes, pill does not
+    if (isVinSolutions && window !== window.top) return;
     if (isVinSolutions && bodyText.length < 500) return;
-
-    // FIX 7: VinSolutions dashboard guard — only inject when customer panel is likely present
-    if (isVinSolutions && isUIFrame) {
-      const vinUrl = window.location.href.toLowerCase();
-      const hasCustomerPanel = bodyText.includes('Customer Dashboard') || bodyText.includes('(Individual)') || bodyText.includes('(Business)') || vinUrl.includes('leadmanagement') || vinUrl.includes('customer');
-      if (!hasCustomerPanel) {
-        // Watch for customer panel to appear, then inject
-        const vinObserver = new MutationObserver(() => {
-          const t = document.body?.innerText || '';
-          if (t.includes('Customer Dashboard') || t.includes('(Individual)') || t.includes('(Business)')) {
-            vinObserver.disconnect();
-            if (!document.getElementById('oper8er-pill')) location.reload(); // re-trigger content script
-          }
-        });
-        vinObserver.observe(document.body, { childList: true, subtree: true });
-        // Allow pill after 3 seconds even if no customer (rep may navigate)
-        setTimeout(() => { vinObserver.disconnect(); }, 3000);
-        return; // Don't inject pill yet
-      }
-    }
 
     // FIX 5/6: SPA observer for Facebook/Instagram — wait for DM container
     if ((isFacebook || isInstagram) && !document.querySelector('[role="main"], [class*="direct"], [class*="message"]')) {
