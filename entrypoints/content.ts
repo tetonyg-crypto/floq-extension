@@ -492,8 +492,8 @@ export default defineContentScript({
       }
 
       // ===== VOICE TAB — Push-to-talk =====
-      let voiceRecognition: any = null;
-      let voiceActive = false;
+      let voiceTabRecognition: any = null;
+      let voiceTabActive = false;
       const voiceMic = s.getElementById('o8-voice-mic');
       const voiceLabel = s.getElementById('o8-voice-label');
       const voiceTranscript = s.getElementById('o8-voice-transcript');
@@ -503,40 +503,40 @@ export default defineContentScript({
       function startVoiceCapture() {
         const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         if (!SR) { if (voiceLabel) voiceLabel.textContent = 'Voice not supported in this browser'; return; }
-        voiceRecognition = new SR();
-        voiceRecognition.continuous = false;
-        voiceRecognition.interimResults = true;
-        voiceRecognition.lang = 'en-US';
-        voiceActive = true;
+        voiceTabRecognition = new SR();
+        voiceTabRecognition.continuous = false;
+        voiceTabRecognition.interimResults = true;
+        voiceTabRecognition.lang = 'en-US';
+        voiceTabActive = true;
         if (voiceMic) voiceMic.classList.add('active');
         if (voiceLabel) voiceLabel.textContent = 'Listening...';
         if (voiceTranscript) { voiceTranscript.style.display = 'block'; voiceTranscript.textContent = ''; }
 
-        voiceRecognition.onresult = (e: any) => {
+        voiceTabRecognition.onresult = (e: any) => {
           const transcript = Array.from(e.results).map((r: any) => r[0].transcript).join('');
           if (voiceTranscript) voiceTranscript.textContent = transcript;
         };
-        voiceRecognition.onend = () => {
-          voiceActive = false;
+        voiceTabRecognition.onend = () => {
+          voiceTabActive = false;
           if (voiceMic) voiceMic.classList.remove('active');
           if (voiceLabel) voiceLabel.textContent = 'Tap to talk again';
           if (voiceTranscript?.textContent?.trim()) {
             if (voiceGenBtn) voiceGenBtn.style.display = 'block';
           }
         };
-        voiceRecognition.onerror = () => {
-          voiceActive = false;
+        voiceTabRecognition.onerror = () => {
+          voiceTabActive = false;
           if (voiceMic) voiceMic.classList.remove('active');
           if (voiceLabel) voiceLabel.textContent = 'Hold to talk';
         };
-        voiceRecognition.start();
+        voiceTabRecognition.start();
       }
 
       if (voiceMic) {
         voiceMic.addEventListener('mousedown', startVoiceCapture);
-        voiceMic.addEventListener('mouseup', () => { if (voiceRecognition && voiceActive) voiceRecognition.stop(); });
+        voiceMic.addEventListener('mouseup', () => { if (voiceTabRecognition && voiceTabActive) voiceTabRecognition.stop(); });
         voiceMic.addEventListener('touchstart', (e) => { e.preventDefault(); startVoiceCapture(); });
-        voiceMic.addEventListener('touchend', () => { if (voiceRecognition && voiceActive) voiceRecognition.stop(); });
+        voiceMic.addEventListener('touchend', () => { if (voiceTabRecognition && voiceTabActive) voiceTabRecognition.stop(); });
       }
 
       if (voiceGenBtn) {
