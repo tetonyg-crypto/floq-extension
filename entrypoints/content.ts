@@ -198,7 +198,9 @@ export default defineContentScript({
     if (!isVinSolutions && window !== window.top) return;
     // VinSolutions: PILL ONLY IN TOP FRAME — scanning runs in iframes, pill does not
     if (isVinSolutions && window !== window.top) return;
-    if (isVinSolutions && bodyText.length < 500) return;
+    // Removed bodyText.length < 500 guard — VinSolutions top frame is often a thin shell
+    // with all content in iframes, so the pill must inject regardless of body text length
+    console.log(`[Floq] Pill injection proceeding — platform: ${PLATFORM}, isTop: ${window === window.top}, bodyLen: ${bodyText.length}`);
 
     // FIX 5/6: SPA observer for Facebook/Instagram — wait for DM container
     if ((isFacebook || isInstagram) && !document.querySelector('[role="main"], [class*="direct"], [class*="message"]')) {
