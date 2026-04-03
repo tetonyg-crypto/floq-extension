@@ -28,7 +28,7 @@ export default defineConfig({
         '*://*.vinsolutions.com/*',
         '*://vinsolutions.app.coxautoinc.com/*',
         '*://mail.google.com/*',
-        '*://www.facebook.com/messages/*',
+        '*://www.facebook.com/*',
         '*://www.messenger.com/*',
         '*://www.linkedin.com/*',
         '*://web.whatsapp.com/*'
