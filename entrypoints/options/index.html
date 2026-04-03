@@ -45,14 +45,14 @@ textarea{resize:vertical;min-height:50px}
 
   <div id="no-profile" class="no-profile" style="display:none">
     <p>No profile found. Complete onboarding to set up your Floq profile.</p>
-    <button onclick="chrome.runtime.getURL && window.open(chrome.runtime.getURL('onboarding.html'))">Start Setup</button>
+    <button id="setup-btn">Start Setup</button>
   </div>
 
   <div id="settings-body" style="display:none">
 
     <!-- WHO YOU ARE -->
     <div class="section">
-      <div class="section-header" onclick="toggleSection(this)">Who You Are <span class="arrow open">&#9662;</span></div>
+      <div class="section-header">Who You Are <span class="arrow open">&#9662;</span></div>
       <div class="section-body open">
         <div class="row">
           <div><label>First Name</label><input id="p-first"></div>
@@ -60,13 +60,13 @@ textarea{resize:vertical;min-height:50px}
         </div>
         <label>Job Title</label><input id="p-title">
         <label>Years in Automotive</label><input id="p-years" readonly>
-        <button class="save-btn" onclick="saveSection('identity')">Save</button><span class="saved" id="save-identity">Saved</span>
+        <button class="save-btn" data-section="identity">Save</button><span class="saved" id="save-identity">Saved</span>
       </div>
     </div>
 
     <!-- WHERE YOU WORK -->
     <div class="section">
-      <div class="section-header" onclick="toggleSection(this)">Where You Work <span class="arrow">&#9662;</span></div>
+      <div class="section-header">Where You Work <span class="arrow">&#9662;</span></div>
       <div class="section-body">
         <label>Dealership</label><input id="p-dealer">
         <div class="row">
@@ -80,13 +80,13 @@ textarea{resize:vertical;min-height:50px}
           <div><label>Tax Rate (%)</label><input id="p-tax" type="number" step="0.01"></div>
         </div>
         <label>Salt Roads</label><input id="p-salt" readonly>
-        <button class="save-btn" onclick="saveSection('dealership')">Save</button><span class="saved" id="save-dealership">Saved</span>
+        <button class="save-btn" data-section="dealership">Save</button><span class="saved" id="save-dealership">Saved</span>
       </div>
     </div>
 
     <!-- HOW YOU COMMUNICATE -->
     <div class="section">
-      <div class="section-header" onclick="toggleSection(this)">How You Communicate <span class="arrow">&#9662;</span></div>
+      <div class="section-header">How You Communicate <span class="arrow">&#9662;</span></div>
       <div class="section-body">
         <label>Tone</label><input id="p-tone">
         <label>Emojis</label><input id="p-emojis">
@@ -94,19 +94,19 @@ textarea{resize:vertical;min-height:50px}
         <label>Email Sign-Off</label><input id="p-emailsig">
         <label>Languages</label><input id="p-langs">
         <label>Selling Philosophy</label><textarea id="p-philosophy" maxlength="200"></textarea>
-        <button class="save-btn" onclick="saveSection('voice')">Save</button><span class="saved" id="save-voice">Saved</span>
+        <button class="save-btn" data-section="voice">Save</button><span class="saved" id="save-voice">Saved</span>
       </div>
     </div>
 
     <!-- YOUR CUSTOMERS -->
     <div class="section">
-      <div class="section-header" onclick="toggleSection(this)">Your Customers <span class="arrow">&#9662;</span></div>
+      <div class="section-header">Your Customers <span class="arrow">&#9662;</span></div>
       <div class="section-body">
         <label>Customer Types</label><input id="p-custtypes" readonly>
         <label>Common Objections</label><input id="p-objections" readonly>
         <label>Market Type</label><input id="p-market">
         <label>Customer Note</label><textarea id="p-custnote" maxlength="200"></textarea>
-        <button class="save-btn" onclick="saveSection('market')">Save</button><span class="saved" id="save-market">Saved</span>
+        <button class="save-btn" data-section="market">Save</button><span class="saved" id="save-market">Saved</span>
       </div>
     </div>
 
@@ -116,125 +116,6 @@ textarea{resize:vertical;min-height:50px}
   </div>
 </div>
 
-<script>
-let profile = null;
-
-chrome.storage.sync.get(['profile', 'profile_onboarded'], d => {
-  if (!d.profile_onboarded) {
-    document.getElementById('no-profile').style.display = 'block';
-    return;
-  }
-  try { profile = JSON.parse(d.profile); } catch(e) { profile = {}; }
-  document.getElementById('settings-body').style.display = 'block';
-  loadFields();
-  renderPreview();
-});
-
-function loadFields() {
-  const id = profile.identity || {};
-  const dl = profile.dealership || {};
-  const vc = profile.voice || {};
-  const mk = profile.market || {};
-  document.getElementById('p-first').value = id.firstName || '';
-  document.getElementById('p-last').value = id.lastName || '';
-  document.getElementById('p-title').value = id.jobTitle || '';
-  document.getElementById('p-years').value = id.yearsExperience || '';
-  document.getElementById('p-dealer').value = dl.name || '';
-  document.getElementById('p-city').value = dl.city || '';
-  document.getElementById('p-state').value = dl.state || '';
-  document.getElementById('p-license').value = dl.licenseKey || '';
-  document.getElementById('p-crm').value = dl.crm || '';
-  document.getElementById('p-docfee').value = dl.docFee || '';
-  document.getElementById('p-tax').value = dl.taxRate || '';
-  document.getElementById('p-salt').value = dl.saltRoads || 'no';
-  document.getElementById('p-tone').value = vc.tone || '';
-  document.getElementById('p-emojis').value = vc.emojis || '';
-  document.getElementById('p-textsig').value = vc.textSignature || '';
-  document.getElementById('p-emailsig').value = vc.emailSignoff || '';
-  document.getElementById('p-langs').value = (vc.languages || []).join(', ');
-  document.getElementById('p-philosophy').value = vc.philosophy || '';
-  document.getElementById('p-custtypes').value = (mk.customerTypes || []).join(', ');
-  document.getElementById('p-objections').value = (mk.objections || []).join(', ');
-  document.getElementById('p-market').value = mk.marketType || '';
-  document.getElementById('p-custnote').value = mk.customerNote || '';
-  // API key field removed — all calls go through Railway proxy
-}
-
-function saveSection(section) {
-  if (section === 'identity') {
-    profile.identity.firstName = document.getElementById('p-first').value.trim();
-    profile.identity.lastName = document.getElementById('p-last').value.trim();
-    profile.identity.jobTitle = document.getElementById('p-title').value.trim();
-  } else if (section === 'dealership') {
-    profile.dealership.name = document.getElementById('p-dealer').value.trim();
-    profile.dealership.city = document.getElementById('p-city').value.trim();
-    profile.dealership.state = document.getElementById('p-state').value.trim();
-    profile.dealership.licenseKey = document.getElementById('p-license').value.trim();
-    profile.dealership.crm = document.getElementById('p-crm').value.trim();
-    profile.dealership.docFee = document.getElementById('p-docfee').value.trim();
-    profile.dealership.taxRate = document.getElementById('p-tax').value.trim();
-  } else if (section === 'voice') {
-    profile.voice.tone = document.getElementById('p-tone').value.trim();
-    profile.voice.emojis = document.getElementById('p-emojis').value.trim();
-    profile.voice.textSignature = document.getElementById('p-textsig').value.trim();
-    profile.voice.emailSignoff = document.getElementById('p-emailsig').value.trim();
-    profile.voice.philosophy = document.getElementById('p-philosophy').value.trim();
-  } else if (section === 'market') {
-    profile.market.marketType = document.getElementById('p-market').value.trim();
-    profile.market.customerNote = document.getElementById('p-custnote').value.trim();
-  }
-
-  chrome.storage.sync.set({
-    profile: JSON.stringify(profile),
-    rep_name: (profile.identity.firstName + ' ' + profile.identity.lastName).trim(),
-    dealership: profile.dealership.name,
-    dealer_token: profile.dealership.licenseKey
-  }, () => {
-    const el = document.getElementById('save-' + section);
-    el.classList.add('show');
-    setTimeout(() => el.classList.remove('show'), 2000);
-    renderPreview();
-  });
-}
-
-function renderPreview() {
-  const id = profile.identity || {};
-  const dl = profile.dealership || {};
-  const vc = profile.voice || {};
-  const mk = profile.market || {};
-  let ctx = 'REP PROFILE:\n';
-  ctx += `Name: ${id.firstName || ''} ${id.lastName || ''}\n`;
-  if (id.jobTitle) ctx += `Title: ${id.jobTitle}\n`;
-  if (id.yearsExperience) ctx += `Experience: ${id.yearsExperience}\n`;
-  ctx += `Dealership: ${dl.name || ''}\n`;
-  if (dl.city && dl.state) ctx += `Location: ${dl.city}, ${dl.state}\n`;
-  if (dl.crm) ctx += `CRM: ${dl.crm}\n`;
-  if (mk.marketType) ctx += `Market type: ${mk.marketType}\n`;
-  if (dl.saltRoads) ctx += `Road salting: ${dl.saltRoads}\n`;
-  if (dl.docFee) ctx += `Doc fee: $${dl.docFee}\n`;
-  if (dl.taxRate) ctx += `Tax rate: ${dl.taxRate}%\n`;
-  ctx += '\nCOMMUNICATION STYLE:\n';
-  if (vc.tone) ctx += `Tone: ${vc.tone}\n`;
-  if (vc.emojis) ctx += `Emojis: ${vc.emojis}\n`;
-  if (vc.textSignature) ctx += `Text signature: ${vc.textSignature}\n`;
-  if (vc.emailSignoff) ctx += `Email sign-off: ${vc.emailSignoff}\n`;
-  if (vc.languages?.length) ctx += `Languages: ${vc.languages.join(', ')}\n`;
-  if (vc.philosophy) ctx += `Selling philosophy: ${vc.philosophy}\n`;
-  if (mk.customerTypes?.length || mk.objections?.length || mk.customerNote) {
-    ctx += '\nCUSTOMER CONTEXT:\n';
-    if (mk.customerTypes?.length) ctx += `Customer types: ${mk.customerTypes.join(', ')}\n`;
-    if (mk.objections?.length) ctx += `Common objections: ${mk.objections.join(', ')}\n`;
-    if (mk.customerNote) ctx += `Market notes: ${mk.customerNote}\n`;
-  }
-  document.getElementById('ctx-preview').textContent = ctx;
-}
-
-function toggleSection(header) {
-  const body = header.nextElementSibling;
-  const arrow = header.querySelector('.arrow');
-  body.classList.toggle('open');
-  arrow.classList.toggle('open');
-}
-</script>
+<script type="module" src="./options.js"></script>
 </body>
 </html>
