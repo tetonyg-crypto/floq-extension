@@ -458,7 +458,7 @@ export default defineContentScript({
       if (isGenerating) return; isGenerating = true;
       if (isGmail || isFacebook || isLinkedIn || isInstagram) {
         const featureKey = isGmail ? 'gmail' : isFacebook ? 'facebook' : isInstagram ? 'facebook' : 'linkedin';
-        if (!(await isFeatureUnlocked(featureKey))) { const out = s.getElementById('o8-outputs'); if (out) out.innerHTML = '<div class="gate-card">Cross-platform available in Floq Command. Contact yancy@yenes.ai</div>'; isGenerating = false; return; }
+        if (!(await isFeatureUnlocked(featureKey))) { const out = s.getElementById('o8-outputs'); if (out) out.innerHTML = '<div class="gate-card">This feature is available on your dealership\'s Floq plan. Contact your manager to unlock it.</div>'; isGenerating = false; return; }
       }
       const input = (s.getElementById('o8-input') as HTMLTextAreaElement).value.trim();
       if (!input && !leadData?.customerName) { isGenerating = false; return; }
@@ -542,17 +542,17 @@ export default defineContentScript({
       }
     }
 
-    const GATE_CARD = `<div class="gate-card"><div class="gate-icon">🔒</div><div class="gate-title">Available in Floq Command</div><div class="gate-text">Upgrade to unlock Coach, Voice, and Screenshot mode.</div><div class="gate-contact">Contact yancy@yenes.ai</div></div>`;
+    const GATE_CARD = `<div class="gate-card"><div class="gate-icon">🔒</div><div class="gate-title">Feature Locked</div><div class="gate-text">This feature is available on your dealership's Floq plan. Contact your manager to unlock it.</div></div>`;
 
     // ===== FIX 7: SETTINGS HTML =====
     function getSettingsHTML(): string {
       if (currentTier === 'floor') {
         return `<div class="settings-section">
           <div class="settings-label">Tone</div>
-          <div class="settings-options locked"><label><input type="radio" disabled checked> Professional</label><label><input type="radio" disabled> Friendly</label><label><input type="radio" disabled> Casual</label><label><input type="radio" disabled> Direct</label><div class="lock-overlay">🔒 Available in Floq Command</div></div>
+          <div class="settings-options locked"><label><input type="radio" disabled checked> Professional</label><label><input type="radio" disabled> Friendly</label><label><input type="radio" disabled> Casual</label><label><input type="radio" disabled> Direct</label><div class="lock-overlay">🔒 Ask your manager to upgrade</div></div>
           <div class="settings-label">Goal</div>
-          <div class="settings-options locked"><label><input type="radio" disabled checked> Close the deal</label><label><input type="radio" disabled> Book appointment</label><label><input type="radio" disabled> Gather info</label><label><input type="radio" disabled> Nurture long-term</label><div class="lock-overlay">🔒 Available in Floq Command</div></div>
-          <div class="upgrade-banner">Upgrade to Floq Command at $4,999/mo to customize your AI's tone and goals.<br><strong>Contact yancy@yenes.ai</strong></div>
+          <div class="settings-options locked"><label><input type="radio" disabled checked> Close the deal</label><label><input type="radio" disabled> Book appointment</label><label><input type="radio" disabled> Gather info</label><label><input type="radio" disabled> Nurture long-term</label><div class="lock-overlay">🔒 Ask your manager to upgrade</div></div>
+          <div class="upgrade-banner">Your dealership hasn't unlocked this feature yet. Ask your manager about upgrading your Floq plan.</div>
         </div>`;
       }
       return `<div class="settings-section">
