@@ -46,6 +46,7 @@ export default defineContentScript({
   runAt: 'document_idle',
 
   main() {
+    console.log('[Floq] Content script loaded on', PLATFORM, window.location.href);
     if (PLATFORM === 'unknown') return;
 
     const isVinSolutions = PLATFORM === 'vinsolutions';
@@ -152,7 +153,7 @@ export default defineContentScript({
           } catch(e) {}
         }
       }
-      const vehicle = extractVehicle(text);
+      const vehicle = extractVehicle(text) || null; // FIX 1: null, never empty string
       let source = ''; const sm = text.match(/Source:\s*(.+)/i); if (sm) source = sm[1].trim().split('\n')[0].slice(0, 50);
       let status = ''; const stm = text.match(/Status:\s*(.+)/i); if (stm) status = stm[1].trim().split('\n')[0].slice(0, 30);
       let lastContact = ''; const cm = text.match(/Attempted:\s*(.+)/i) || text.match(/Contacted:\s*(.+)/i) || text.match(/Created:\s*(.+)/i); if (cm) lastContact = cm[1].trim().split('\n')[0].slice(0, 30);
@@ -213,6 +214,22 @@ export default defineContentScript({
         setTimeout(() => { vinObserver.disconnect(); }, 3000);
         return; // Don't inject pill yet
       }
+    }
+
+    // FIX 5/6: SPA observer for Facebook/Instagram — wait for DM container
+    if ((isFacebook || isInstagram) && !document.querySelector('[role="main"], [class*="direct"], [class*="message"]')) {
+      const spaObserver = new MutationObserver(() => {
+        if (document.querySelector('[role="main"], [class*="direct"], [class*="message"]')) {
+          spaObserver.disconnect();
+          // Re-run injection logic now that the container exists
+          if (!document.getElementById('oper8er-pill')) {
+            console.log('[Floq] SPA container detected, injecting pill');
+            // Will fall through to pill injection below on next line
+          }
+        }
+      });
+      spaObserver.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => spaObserver.disconnect(), 8000); // give up after 8s
     }
 
     // ===== HARD INJECTION GUARD =====
@@ -294,7 +311,10 @@ export default defineContentScript({
       const w = getSidebarWidth();
       // Gmail: LEFT side below header. All others: RIGHT side.
       if (isGmail) {
-        Object.assign(host.style, { position:'fixed', top:'64px', left:'0', width: w, height:'calc(100vh - 64px)', zIndex:'2147483647' });
+        Object.assign(host.style, { position:'fixed', top:'64px', left:'0', width: w, height:'auto', maxHeight:'calc(100vh - 64px)', zIndex:'2147483647' });
+      } else if (!isVinSolutions) {
+        // Cross-platform compact: right side, auto height
+        Object.assign(host.style, { position:'fixed', top:'0', right:'0', width: w, height:'auto', maxHeight:'100vh', zIndex:'2147483647' });
       } else {
         Object.assign(host.style, { position:'fixed', top:'0', right:'0', width: w, height:'100vh', zIndex:'2147483647' });
       }
@@ -326,13 +346,9 @@ export default defineContentScript({
       // Main mic
       attachInlineMic(s, mainInput, s.getElementById('o8-mic')!);
 
-      // Settings link → open settings panel
       const settingsBtn = s.getElementById('o8-settings-btn');
       const settingsPanel = s.getElementById('o8-settings-panel');
       const settingsBack = s.getElementById('o8-settings-back');
-      if (settingsBtn && settingsPanel) {
-        settingsBtn.onclick = () => { s.getElementById('o8-quick')!.style.display = 'none'; s.getElementById('o8-tools-panel')!.style.display = 'none'; settingsPanel.style.display = 'flex'; };
-      }
       if (settingsBack) {
         settingsBack.onclick = () => { settingsPanel!.style.display = 'none'; s.getElementById('o8-quick')!.style.display = 'flex'; };
       }
@@ -353,11 +369,20 @@ export default defineContentScript({
       }
 
       // Tools panel
-      const toolsBtn = s.getElementById('o8-tools-btn');
       const toolsPanel = s.getElementById('o8-tools-panel');
       const toolsBack = s.getElementById('o8-tools-back');
-      if (toolsBtn && toolsPanel) { toolsBtn.onclick = () => { s.getElementById('o8-quick')!.style.display = 'none'; toolsPanel.style.display = 'flex'; }; }
+      const openTools = () => { s.getElementById('o8-quick')!.style.display = 'none'; if (toolsPanel) toolsPanel.style.display = 'flex'; };
+      const toolsBtn = s.getElementById('o8-tools-btn');
+      if (toolsBtn) toolsBtn.onclick = openTools;
+      const toolsBtnInline = s.getElementById('o8-tools-btn-inline');
+      if (toolsBtnInline) toolsBtnInline.onclick = openTools;
       if (toolsBack) { toolsBack.onclick = () => { toolsPanel!.style.display = 'none'; s.getElementById('o8-quick')!.style.display = 'flex'; }; }
+
+      // Settings — both footer and inline
+      const openSettings = () => { s.getElementById('o8-quick')!.style.display = 'none'; if (toolsPanel) toolsPanel.style.display = 'none'; if (settingsPanel) settingsPanel.style.display = 'flex'; };
+      const settingsBtnInline = s.getElementById('o8-settings-btn-inline');
+      if (settingsBtnInline) settingsBtnInline.onclick = openSettings;
+      if (settingsBtn) settingsBtn.onclick = openSettings;
 
       s.querySelectorAll('.tool-tab-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -454,10 +479,7 @@ export default defineContentScript({
         const main = getVinMainContainer();
         if (main) main.style.marginRight = open ? w : '0';
       }
-      if (isGmail) {
-        const gmailMain = document.querySelector('.nH') as HTMLElement;
-        if (gmailMain) gmailMain.style.marginLeft = open ? w : '0';
-      }
+      // Gmail: overlay only, no margin push (FIX 3)
     }
 
     function closeSidebar() {
@@ -473,7 +495,9 @@ export default defineContentScript({
       if (leadData?.customerName) {
         card.style.display = 'block';
         s.getElementById('o8-name')!.textContent = leadData.customerName;
-        s.getElementById('o8-vehicle')!.textContent = leadData.vehicle || 'No vehicle detected';
+        const vehEl = s.getElementById('o8-vehicle')!;
+        if (leadData.vehicle) { vehEl.textContent = leadData.vehicle; vehEl.style.fontStyle = 'normal'; vehEl.style.color = '#2563eb'; }
+        else { vehEl.textContent = 'No vehicle selected'; vehEl.style.fontStyle = 'italic'; vehEl.style.color = '#94a3b8'; }
         let meta = '';
         if (leadData.phone) meta += leadData.phone;
         if (leadData.email) meta += (meta ? ' · ' : '') + leadData.email;
@@ -506,7 +530,7 @@ export default defineContentScript({
       try {
         const response = await browser.runtime.sendMessage({
           type: 'GENERATE_OUTPUT',
-          payload: { type, leadContext: leadData || {}, repInput: input, repName: '', dealership: '', platform: PLATFORM, tone, goal,
+          payload: { type, leadContext: leadData || {}, repInput: input + (leadData?.vehicle ? '' : '\n[SYSTEM: No vehicle of interest detected. Do not mention or invent a vehicle in the response.]'), repName: '', dealership: '', platform: PLATFORM, tone, goal,
             metadata: { workflow_type: type === 'all' ? 'all' : type, customer_name: leadData?.customerName || null, vehicle: leadData?.vehicle || null, email: leadData?.email || null } }
         });
         if (response.error) addOutput(s, 'Error', response.error);
@@ -658,7 +682,12 @@ export default defineContentScript({
       }
     }
 
-    const GATE_CARD = `<div class="gate-card"><div class="gate-icon">🔒</div><div class="gate-title">Feature Locked</div><div class="gate-text">This feature is available on your dealership's Floq plan. Contact your manager to unlock it.</div></div>`;
+    function gateCard(name: string, desc: string): string {
+      return `<div class="gate-card"><div class="gate-icon">🔒</div><div class="gate-title">${esc(name)}</div><div class="gate-desc">${esc(desc)}</div><div class="gate-unlock">Ask your manager to unlock this feature</div></div>`;
+    }
+    const GATE_COACH = gateCard('Coach', 'Objection handler. Tell Coach what the customer just said and get the perfect response for price, trade, financing, or timing objections.');
+    const GATE_CONTEXT = gateCard('Context', 'Screenshot reader. Drop in any conversation screenshot and Floq reads it and writes the reply.');
+    const GATE_COMMAND = gateCard('Command', 'Advanced mode. Direct AI instructions for complex deal situations, multi-touch campaigns, and custom outputs.');
 
     // ===== FIX 7: SETTINGS HTML =====
     function getSettingsHTML(): string {
@@ -704,6 +733,7 @@ export default defineContentScript({
       <button id="o8-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button>
     </div>
     <button id="o8-generate" class="gen-btn">Generate</button>
+    ${!isVinSolutions ? '<div class="inline-links"><button id="o8-tools-btn-inline" class="link-btn">Tools</button><span class="link-sep">|</span><button id="o8-settings-btn-inline" class="link-btn">Settings</button></div>' : ''}
   </div>
   <div id="o8-outputs" class="outputs"></div>
 </div>
@@ -715,10 +745,10 @@ export default defineContentScript({
     <button class="tool-tab-btn" data-tool="context">Context</button>
     <button class="tool-tab-btn" data-tool="command">Command</button>
   </div>
-  <div id="tool-coach" class="tool-content" style="display:block">${isFloor ? GATE_CARD : `<div class="tool-section"><div class="input-wrap"><textarea id="o8-coach-input" class="main-input" placeholder="What did the customer just say?" rows="2"></textarea><button id="o8-coach-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><div class="coach-chips"><button class="coach-chip">Need to think about it</button><button class="coach-chip">Price too high</button><button class="coach-chip">Bad credit</button><button class="coach-chip">Spouse not here</button></div><button id="o8-coach-btn" class="gen-btn">Coach Me</button></div><div id="o8-coach-output" class="tool-output"></div>`}</div>
+  <div id="tool-coach" class="tool-content" style="display:block">${isFloor ? GATE_COACH : `<div class="tool-section"><div class="input-wrap"><textarea id="o8-coach-input" class="main-input" placeholder="What did the customer just say?" rows="2"></textarea><button id="o8-coach-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><div class="coach-chips"><button class="coach-chip">Need to think about it</button><button class="coach-chip">Price too high</button><button class="coach-chip">Bad credit</button><button class="coach-chip">Spouse not here</button></div><button id="o8-coach-btn" class="gen-btn">Coach Me</button></div><div id="o8-coach-output" class="tool-output"></div>`}</div>
   <div id="tool-alerts" class="tool-content" style="display:none"><div class="tool-section"><div class="input-wrap"><input id="o8-alert-input" class="main-input" placeholder="e.g. Move the Tacoma by noon" /><button id="o8-alert-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><button id="o8-alert-btn" class="gen-btn" style="background:#FF9500">Set Alert</button></div><div id="o8-alert-list" class="tool-output"></div></div>
-  <div id="tool-context" class="tool-content" style="display:none">${isFloor ? GATE_CARD : `<div class="tool-section"><div id="o8-ctx-dropzone" class="ctx-dropzone"><span>Drop screenshot or paste (Ctrl+V)</span></div><div id="o8-ctx-preview" class="ctx-preview" style="display:none"><img id="o8-ctx-img" class="ctx-img" /><button id="o8-ctx-remove" class="ctx-remove">&times;</button></div><textarea id="o8-ctx-direction" class="main-input" placeholder="What do you want to say?" rows="2"></textarea><button id="o8-ctx-generate" class="gen-btn" disabled>Generate Reply</button></div><div id="o8-ctx-output" class="tool-output"></div>`}</div>
-  <div id="tool-command" class="tool-content" style="display:none">${isFloor ? GATE_CARD : `<div class="tool-section"><div class="input-wrap"><textarea id="o8-cmd-input" class="main-input" placeholder="Type a command..." rows="2"></textarea><button id="o8-cmd-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><button id="o8-cmd-execute" class="gen-btn">Execute</button></div><div id="o8-cmd-status" class="tool-output"></div>`}</div>
+  <div id="tool-context" class="tool-content" style="display:none">${isFloor ? GATE_CONTEXT : `<div class="tool-section"><div id="o8-ctx-dropzone" class="ctx-dropzone"><span>Drop screenshot or paste (Ctrl+V)</span></div><div id="o8-ctx-preview" class="ctx-preview" style="display:none"><img id="o8-ctx-img" class="ctx-img" /><button id="o8-ctx-remove" class="ctx-remove">&times;</button></div><textarea id="o8-ctx-direction" class="main-input" placeholder="What do you want to say?" rows="2"></textarea><button id="o8-ctx-generate" class="gen-btn" disabled>Generate Reply</button></div><div id="o8-ctx-output" class="tool-output"></div>`}</div>
+  <div id="tool-command" class="tool-content" style="display:none">${isFloor ? GATE_COMMAND : `<div class="tool-section"><div class="input-wrap"><textarea id="o8-cmd-input" class="main-input" placeholder="Type a command..." rows="2"></textarea><button id="o8-cmd-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><button id="o8-cmd-execute" class="gen-btn">Execute</button></div><div id="o8-cmd-status" class="tool-output"></div>`}</div>
 </div>
 <div id="o8-settings-panel" class="tools-panel" style="display:none">
   <div class="tools-header"><button id="o8-settings-back" class="back-btn">← Back</button><span class="tools-title">Settings</span></div>
@@ -735,7 +765,7 @@ export default defineContentScript({
       return `
 * { margin:0; padding:0; box-sizing:border-box; }
 :host { all:initial; font-family:system-ui,-apple-system,sans-serif; font-size:13px; color:#1a202c; }
-#o8 { width:${width}; height:100vh; background:#fff; border-left:1px solid #e2e8f0; border-right:1px solid #e2e8f0; overflow-y:auto; overscroll-behavior:contain; box-shadow:0 0 16px rgba(0,0,0,0.06); display:flex; flex-direction:column; }
+#o8 { width:${width}; height:${isVinSolutions ? '100vh' : '480px'}; max-height:100vh; background:#fff; border-left:1px solid #e2e8f0; border-right:1px solid #e2e8f0; overflow-y:auto; overscroll-behavior:contain; box-shadow:0 0 16px rgba(0,0,0,0.06); display:flex; flex-direction:column; ${!isVinSolutions ? 'border-radius:0 0 8px 0;' : ''} }
 .header { padding:10px 14px; border-bottom:1px solid #e8eaed; display:flex; align-items:center; gap:8px; flex-shrink:0; }
 .logo { font-size:14px; font-weight:800; color:#7F77DD; letter-spacing:3px; }
 .badge { font-size:9px; font-weight:600; padding:2px 8px; border-radius:10px; text-transform:uppercase; letter-spacing:0.5px; flex:1; text-align:center; }
@@ -775,7 +805,8 @@ export default defineContentScript({
 .tool-section { display:flex; flex-direction:column; gap:8px; } .tool-output { padding:8px 0; }
 .tool-result { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; font-size:12px; line-height:1.6; margin-top:8px; }
 .coach-chips { display:flex; flex-wrap:wrap; gap:4px; } .coach-chip { padding:4px 10px; border-radius:14px; font-size:10px; font-weight:500; font-family:inherit; border:1px solid #e2e8f0; background:#f8fafc; color:#64748b; cursor:pointer; } .coach-chip:hover { border-color:#7F77DD; color:#7F77DD; background:#F0EFFF; }
-.gate-card { text-align:center; padding:24px 16px; } .gate-icon { font-size:24px; margin-bottom:8px; } .gate-title { font-size:14px; font-weight:700; margin-bottom:4px; } .gate-text { font-size:12px; color:#64748b; line-height:1.5; margin-bottom:8px; } .gate-contact { font-size:11px; color:#7F77DD; font-weight:600; }
+.gate-card { text-align:center; padding:20px 14px; } .gate-icon { font-size:20px; margin-bottom:6px; } .gate-title { font-size:13px; font-weight:700; margin-bottom:4px; } .gate-desc { font-size:11px; color:#64748b; line-height:1.5; margin-bottom:8px; } .gate-unlock { font-size:10px; color:#7F77DD; font-weight:600; }
+.inline-links { display:flex; align-items:center; justify-content:center; gap:6px; margin-top:8px; } .link-btn { background:none; border:none; color:#7F77DD; font-size:11px; font-weight:600; cursor:pointer; font-family:inherit; padding:2px 4px; } .link-btn:hover { text-decoration:underline; } .link-sep { color:#e2e8f0; font-size:11px; }
 .ctx-dropzone { border:2px dashed #7F77DD; border-radius:8px; background:#F0EFFF; padding:16px; text-align:center; font-size:11px; color:#7F77DD; display:flex; align-items:center; justify-content:center; min-height:60px; cursor:pointer; } .ctx-dropzone.dragover { background:#e8e4ff; }
 .ctx-preview { position:relative; text-align:center; margin-bottom:8px; } .ctx-img { max-width:180px; max-height:100px; border-radius:6px; border:1px solid #e2e8f0; } .ctx-remove { position:absolute; top:-6px; right:calc(50% - 96px); width:18px; height:18px; border-radius:50%; background:#FF3B30; color:#fff; border:none; font-size:11px; cursor:pointer; }
 .alert-item { display:flex; align-items:center; padding:6px 8px; background:#FFF7ED; border:1px solid #FBBF24; border-radius:6px; margin-bottom:4px; font-size:11px; gap:6px; } .alert-time { font-size:10px; color:#92400E; margin-left:auto; } .alert-dismiss { background:none; border:none; color:#94a3b8; cursor:pointer; font-size:14px; }
