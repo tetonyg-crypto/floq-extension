@@ -16,7 +16,21 @@ export default defineBackground(() => {
     if (msg.type === 'GENERATE_OUTPUT') {
       handleGenerate(msg.payload)
         .then(sendResponse)
-        .catch(err => sendResponse({ error: err.message }));
+        .catch(err => {
+          const errType = err.message?.includes('License') ? 'AUTH_ERROR'
+            : err.message?.includes('429') ? 'API_ERROR'
+            : err.message?.includes('fetch') ? 'NETWORK_ERROR'
+            : 'UNKNOWN';
+          reportError(errType, err.message).catch(() => {});
+          sendResponse({ error: err.message });
+        });
+      return true;
+    }
+
+    if (msg.type === 'CHECK_FEATURES') {
+      browser.storage.local.get(['floq_tier', 'floq_features']).then(data => {
+        sendResponse({ tier: data.floq_tier || 'core', features: data.floq_features || getTierFeatures('core') });
+      }).catch(() => sendResponse({ tier: 'core', features: getTierFeatures('core') }));
       return true;
     }
 
@@ -40,14 +54,20 @@ export default defineBackground(() => {
     if (msg.type === 'COACH_ME') {
       handleCoach(msg.payload)
         .then(sendResponse)
-        .catch(err => sendResponse({ error: err.message }));
+        .catch(err => {
+          reportError('API_ERROR', `Coach: ${err.message}`).catch(() => {});
+          sendResponse({ error: err.message });
+        });
       return true;
     }
 
     if (msg.type === 'EXECUTE_COMMAND') {
       handleCommand(msg.payload)
         .then(sendResponse)
-        .catch(err => sendResponse({ error: err.message }));
+        .catch(err => {
+          reportError('API_ERROR', `Command: ${err.message}`).catch(() => {});
+          sendResponse({ error: err.message });
+        });
       return true;
     }
 
@@ -86,6 +106,63 @@ export default defineBackground(() => {
       return true;
     }
   });
+
+  // ===== HEARTBEAT — fires every 5 minutes =====
+  setInterval(async () => {
+    try {
+      const settings = await browser.storage.sync.get(['dealer_token', 'rep_name', 'dealership']);
+      if (!settings.dealer_token) return;
+      const manifest = browser.runtime.getManifest();
+      let platform = 'idle';
+      try {
+        const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+        if (tabs[0]?.url) platform = new URL(tabs[0].url).hostname;
+      } catch(e) {}
+      const resp = await fetch(`${PROXY_URL}/api/heartbeat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          license_key: settings.dealer_token,
+          rep_name: settings.rep_name || 'Unknown',
+          dealership: settings.dealership || '',
+          extension_version: manifest.version || '1.3.0',
+          platform: platform,
+          timestamp: new Date().toISOString()
+        })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        // Store tier + features from heartbeat response for feature gating
+        if (data.tier) {
+          await browser.storage.local.set({ floq_tier: data.tier, floq_features: data.features || {} });
+        }
+      }
+    } catch(e) {
+      // Heartbeat failed — report error silently
+      reportError('NETWORK_ERROR', `Heartbeat failed: ${(e as Error).message}`).catch(() => {});
+    }
+  }, 5 * 60 * 1000); // 5 minutes
+
+  // Fire initial heartbeat after 10 seconds (let onboarding finish)
+  setTimeout(async () => {
+    try {
+      const settings = await browser.storage.sync.get(['dealer_token', 'rep_name', 'dealership']);
+      if (!settings.dealer_token) return;
+      const manifest = browser.runtime.getManifest();
+      await fetch(`${PROXY_URL}/api/heartbeat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          license_key: settings.dealer_token,
+          rep_name: settings.rep_name || 'Unknown',
+          dealership: settings.dealership || '',
+          extension_version: manifest.version || '1.3.0',
+          platform: 'startup',
+          timestamp: new Date().toISOString()
+        })
+      });
+    } catch(e) {}
+  }, 10000);
 
   // Alert checker — runs every 60 seconds
   setInterval(async () => {
@@ -293,7 +370,43 @@ async function handleCommand(payload: { command: string; currentUrl?: string; ve
   return data;
 }
 
-// logGeneration removed — all logging consolidated to proxy-side (proxy_usage table)
+// ===== ERROR REPORTING =====
+async function reportError(errorType: string, errorMessage: string) {
+  try {
+    const settings = await browser.storage.sync.get(['dealer_token', 'rep_name', 'dealership']);
+    if (!settings.dealer_token) return;
+    const manifest = browser.runtime.getManifest();
+    let platform = 'unknown';
+    try {
+      const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+      if (tabs[0]?.url) platform = new URL(tabs[0].url).hostname;
+    } catch(e) {}
+    await fetch(`${PROXY_URL}/api/error`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        license_key: settings.dealer_token,
+        rep_name: settings.rep_name || 'Unknown',
+        dealership: settings.dealership || '',
+        error_type: errorType,
+        error_message: errorMessage.slice(0, 500),
+        extension_version: manifest.version || '1.3.0',
+        platform: platform
+      })
+    });
+  } catch(e) { /* silent — don't recurse */ }
+}
+
+// ===== FEATURE GATING =====
+function getTierFeatures(tier: string) {
+  const base = { vinsolutions: true, facebook: false, gmail: false, linkedin: false, command_mode: false, voice_coach: false, campaigns: false };
+  if (tier === 'pro' || tier === 'elite') {
+    base.facebook = true; base.gmail = true; base.linkedin = true;
+    base.command_mode = true; base.voice_coach = true;
+  }
+  if (tier === 'elite') { base.campaigns = true; }
+  return base;
+}
 
 function buildUserMessage(payload: any, repName: string, dealership: string, repContext: string = ''): string {
   const lc = payload.leadContext || {};
