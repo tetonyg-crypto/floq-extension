@@ -1,0 +1,400 @@
+/**
+ * Floq Background Service Worker
+ *
+ * ALL generation goes through Railway proxy. No direct API calls.
+ * No API keys in this file. Proxy owns the Anthropic key and system prompt.
+ * Every generation event includes platform field.
+ */
+
+// No SYSTEM_PROMPT in extension — proxy resolves from vertical_config.
+// No API keys in extension — all calls routed through PROXY_URL.
+
+const PROXY_URL = 'https://oper8er-proxy-production.up.railway.app';
+
+export default defineBackground(() => {
+  browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.type === 'GENERATE_OUTPUT') {
+      handleGenerate(msg.payload)
+        .then(sendResponse)
+        .catch(err => sendResponse({ error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'GET_SETTINGS') {
+      browser.storage.sync.get(['rep_name', 'dealership', 'dealer_token'])
+        .then(sendResponse);
+      return true;
+    }
+
+    if (msg.type === 'LOG_ACTION') {
+      const p = msg.payload;
+      console.log(`[Oper8er] Action: ${p.action_type} | Success: ${p.success} | Customer: ${p.customer} | Vehicle: ${p.vehicle}`);
+      return false;
+    }
+
+    if (msg.type === 'OPEN_ONBOARDING') {
+      browser.tabs.create({ url: browser.runtime.getURL('onboarding.html') });
+      return false;
+    }
+
+    if (msg.type === 'COACH_ME') {
+      handleCoach(msg.payload)
+        .then(sendResponse)
+        .catch(err => sendResponse({ error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'EXECUTE_COMMAND') {
+      handleCommand(msg.payload)
+        .then(sendResponse)
+        .catch(err => sendResponse({ error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'OPEN_COMMAND_MODE') {
+      browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+        if (tabs[0]?.id) {
+          browser.tabs.sendMessage(tabs[0].id, { type: 'OPEN_COMMAND_TAB' }).catch(() => {});
+        }
+      }).catch(() => {});
+      return false;
+    }
+
+    if (msg.type === 'SET_ALERT') {
+      browser.storage.local.get('floq_alerts').then(data => {
+        const alerts = data.floq_alerts || [];
+        alerts.push({ id: Date.now().toString(), task: msg.payload.task, alertTime: msg.payload.alertTime, dismissed: false });
+        browser.storage.local.set({ floq_alerts: alerts }).then(() => sendResponse({ ok: true }));
+      }).catch(() => sendResponse({ error: 'Failed to set alert' }));
+      return true;
+    }
+
+    if (msg.type === 'DISMISS_ALERT') {
+      browser.storage.local.get('floq_alerts').then(data => {
+        const alerts = data.floq_alerts || [];
+        const updated = alerts.map((a: any) => a.id === msg.payload.id ? { ...a, dismissed: true } : a);
+        browser.storage.local.set({ floq_alerts: updated }).then(() => sendResponse({ ok: true }));
+      }).catch(() => sendResponse({ ok: true }));
+      return true;
+    }
+
+    if (msg.type === 'GET_ALERTS') {
+      browser.storage.local.get('floq_alerts').then(data => {
+        const alerts = data.floq_alerts || [];
+        sendResponse(alerts.filter((a: any) => !a.dismissed));
+      }).catch(() => sendResponse([]));
+      return true;
+    }
+  });
+
+  // Alert checker — runs every 60 seconds
+  setInterval(async () => {
+    const data = await browser.storage.local.get('floq_alerts');
+    const alerts = data.floq_alerts || [];
+    const now = Date.now();
+    let changed = false;
+    for (const alert of alerts) {
+      if (alert.dismissed || alert.fired) continue;
+      if (now >= alert.alertTime) {
+        alert.fired = true;
+        changed = true;
+        // Inject banner into all active tabs
+        const tabs = await browser.tabs.query({ active: true });
+        for (const tab of tabs) {
+          if (tab.id) {
+            try {
+              await browser.tabs.sendMessage(tab.id, { type: 'SHOW_ALERT_BANNER', payload: { id: alert.id, task: alert.task } });
+            } catch(e) {}
+          }
+        }
+      }
+    }
+    if (changed) await browser.storage.local.set({ floq_alerts: alerts });
+  }, 30000);
+
+  browser.runtime.onInstalled.addListener((details) => {
+    if (details.reason === 'install') {
+      browser.runtime.openOptionsPage();
+    }
+  });
+
+  // Alt+K keyboard shortcut for Command Mode
+  browser.commands?.onCommand?.addListener((command: string) => {
+    if (command === 'open_command_mode') {
+      browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+        if (tabs[0]?.id) {
+          browser.tabs.sendMessage(tabs[0].id, { type: 'OPEN_COMMAND_TAB' }).catch(() => {});
+        }
+      }).catch(() => {});
+    }
+  });
+});
+
+// --- Build rep context from profile for prompt injection ---
+async function buildRepContext(): Promise<{ repName: string; dealership: string; contextBlock: string }> {
+  const data = await browser.storage.sync.get(['profile', 'rep_name', 'dealership']);
+  let profile: any = null;
+  try { profile = data.profile ? JSON.parse(data.profile) : null; } catch(e) {}
+
+  if (!profile) {
+    // Fallback: old-style fields
+    return {
+      repName: data.rep_name || 'Sales Rep',
+      dealership: data.dealership || 'Dealership',
+      contextBlock: ''
+    };
+  }
+
+  const id = profile.identity || {};
+  const dl = profile.dealership || {};
+  const vc = profile.voice || {};
+  const mk = profile.market || {};
+
+  const repName = `${id.firstName || ''} ${id.lastName || ''}`.trim() || 'Sales Rep';
+  const dealership = dl.name || 'Dealership';
+
+  let ctx = 'REP PROFILE:\n';
+  ctx += `Name: ${repName}\n`;
+  if (id.jobTitle) ctx += `Title: ${id.jobTitle}\n`;
+  if (id.yearsExperience) ctx += `Experience: ${id.yearsExperience}\n`;
+  ctx += `Dealership: ${dealership}\n`;
+  if (dl.city && dl.state) ctx += `Location: ${dl.city}, ${dl.state}\n`;
+  if (dl.crm) ctx += `CRM: ${dl.crm}\n`;
+  if (mk.marketType) ctx += `Market type: ${mk.marketType}\n`;
+  if (dl.saltRoads) ctx += `Road salting: ${dl.saltRoads} — ${dl.saltRoads === 'yes' ? 'affects rust and condition language for trades' : 'no road salt, less corrosion concern'}\n`;
+  if (dl.docFee) ctx += `Doc fee: $${dl.docFee}\n`;
+  if (dl.taxRate) ctx += `Tax rate: ${dl.taxRate}%\n`;
+  if (dl.avgNewPrice) ctx += `Avg new car price: ${dl.avgNewPrice}\n`;
+  if (dl.avgUsedPrice) ctx += `Avg used car price: ${dl.avgUsedPrice}\n`;
+
+  ctx += '\nCOMMUNICATION STYLE:\n';
+  if (vc.tone) ctx += `Tone: ${vc.tone}\n`;
+  if (vc.emojis) ctx += `Emojis: ${vc.emojis}\n`;
+  if (vc.textSignature) ctx += `Text signature: ${vc.textSignature}\n`;
+  if (vc.emailSignoff) ctx += `Email sign-off: ${vc.emailSignoff}\n`;
+  if (vc.languages?.length) ctx += `Languages: ${vc.languages.join(', ')}\n`;
+  if (vc.philosophy) ctx += `Selling philosophy: ${vc.philosophy}\n`;
+
+  if (mk.customerTypes?.length || mk.objections?.length || mk.customerNote) {
+    ctx += '\nCUSTOMER CONTEXT:\n';
+    if (mk.customerTypes?.length) ctx += `Primary customer types: ${mk.customerTypes.join(', ')}\n`;
+    if (mk.objections?.length) ctx += `Common objections: ${mk.objections.join(', ')}\n`;
+    if (mk.customerNote) ctx += `Market notes: ${mk.customerNote}\n`;
+  }
+
+  return { repName, dealership, contextBlock: ctx };
+}
+
+async function handleGenerate(payload: {
+  type: string;
+  leadContext: any;
+  repInput: string;
+  repName: string;
+  dealership: string;
+  platform?: string;
+}) {
+  const settings = await browser.storage.sync.get(['dealer_token']);
+  const { repName, dealership, contextBlock } = await buildRepContext();
+
+  const finalRepName = payload.repName || repName;
+  const finalDealership = payload.dealership || dealership;
+  const dealerToken = settings.dealer_token || '';
+  const detectedPlatform = payload.platform || 'chrome_extension';
+  const userMessage = buildUserMessage(payload, finalRepName, finalDealership, contextBlock);
+
+  let text: string;
+  let usage: any = {};
+
+  // All generation goes through Railway proxy — NO direct API calls, NO local keys
+  if (!dealerToken) {
+    throw new Error('No license key found. Complete onboarding at floqsales.com to activate Floq.');
+  }
+  const result = await generateViaProxy(dealerToken, userMessage, detectedPlatform);
+  text = result.text;
+  usage = result.usage;
+
+  const sections = parseSections(text);
+
+  // Log with detected platform (non-blocking)
+  logGeneration(finalRepName, finalDealership, dealerToken, detectedPlatform, payload, text, sections).catch(() => {});
+
+  return { text, sections };
+}
+
+// --- Generate via Proxy ---
+// Does NOT send system prompt — proxy resolves it from dealer's vertical_config
+async function generateViaProxy(dealerToken: string, userMessage: string, platform: string = 'chrome_extension') {
+  const resp = await fetch(`${PROXY_URL}/v1/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      dealer_token: dealerToken,
+      messages: [{ role: 'user', content: userMessage }],
+      max_tokens: 800,
+      model: 'claude-sonnet-4-20250514',
+      platform: platform
+    })
+  });
+
+  if (resp.status === 401) throw new Error('License invalid or expired. Contact support to renew your Floq subscription.');
+  if (resp.status === 429) throw new Error('Too many requests. Wait a few seconds and try again.');
+  if (!resp.ok) {
+    const errBody = await resp.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(errBody.error || `Proxy error: ${resp.status}`);
+  }
+
+  const data = await resp.json();
+  const text = data.content?.[0]?.text || '';
+  if (!text) throw new Error('Empty response from AI. Please try again.');
+
+  return { text, usage: data.usage || {} };
+}
+
+// --- Generate Direct (fallback — uses local SYSTEM_PROMPT) ---
+// --- Coach via Proxy ---
+async function handleCoach(payload: { situation: string; vehicleContext?: string }) {
+  const settings = await browser.storage.sync.get(['dealer_token', 'rep_name', 'dealership']);
+  const resp = await fetch(`${PROXY_URL}/api/coach`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      situation: payload.situation,
+      rep_name: settings.rep_name || '',
+      dealership: settings.dealership || '',
+      vehicle_context: payload.vehicleContext || '',
+      dealer_token: settings.dealer_token || ''
+    })
+  });
+  if (!resp.ok) throw new Error('Coach unavailable. Try again.');
+  const data = await resp.json();
+  return { coaching: data.coaching };
+}
+
+// --- Command Mode via Proxy ---
+async function handleCommand(payload: { command: string; currentUrl?: string; vehicleContext?: string }) {
+  const settings = await browser.storage.sync.get(['dealer_token', 'rep_name', 'dealership']);
+  const resp = await fetch(`${PROXY_URL}/api/command`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      command: payload.command,
+      current_url: payload.currentUrl || '',
+      rep_name: settings.rep_name || '',
+      dealership: settings.dealership || '',
+      customer_context: null,
+      dealer_token: settings.dealer_token || ''
+    })
+  });
+  if (!resp.ok) throw new Error('Command service unavailable. Try again.');
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error);
+
+  // Log command as generation event
+  const parsed = data.parsed;
+  logGeneration(
+    settings.rep_name || '', settings.dealership || '', settings.dealer_token || '',
+    parsed.platform || 'internal', { repInput: payload.command, leadContext: {} },
+    parsed.content || '', { text: null, email: null, crm: null }
+  ).catch(() => {});
+
+  return data;
+}
+
+// --- Supabase Logging (non-blocking, includes platform) ---
+async function logGeneration(
+  repName: string, dealership: string, dealerToken: string,
+  detectedPlatform: string, payload: any, text: string, sections: any
+) {
+  const SUPABASE_URL = 'https://mqnmemnogbotgmsmqfie.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_-sD_RSqo9SNizbhQ0kqWSA_tJbsWD_m';
+
+  fetch(`${SUPABASE_URL}/rest/v1/generation_events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Prefer': 'return=minimal'
+    },
+    body: JSON.stringify({
+      session_id: `ext-${new Date().toISOString().split('T')[0]}-${repName.replace(/\s/g, '')}`,
+      rep_name: repName,
+      dealership: dealership,
+      input: payload.repInput || '',
+      output: text,
+      has_text: !!sections.text,
+      has_email: !!sections.email,
+      has_crm: !!sections.crm,
+      workflow_type: payload.type,
+      customer_name: payload.leadContext?.customerName || '',
+      vehicle: payload.leadContext?.vehicle || '',
+      platform: detectedPlatform,
+    })
+  }).catch(() => {});
+}
+
+function buildUserMessage(payload: any, repName: string, dealership: string, repContext: string = ''): string {
+  const lc = payload.leadContext || {};
+  let msg = '';
+
+  // Inject rep context block at the top of every prompt
+  if (repContext) {
+    msg += repContext + '\n';
+  }
+
+  if (lc.customerName || lc.vehicle) {
+    msg += 'LEAD CONTEXT (from VinSolutions CRM):\n';
+    if (lc.customerName) msg += `Customer: ${lc.customerName}\n`;
+    if (lc.phone) msg += `Phone: ${lc.phone}\n`;
+    if (lc.email) msg += `Email: ${lc.email}\n`;
+    if (lc.vehicle) msg += `Vehicle: ${lc.vehicle}\n`;
+    if (lc.source) msg += `Source: ${lc.source}\n`;
+    if (lc.status) msg += `Status: ${lc.status}\n`;
+    if (lc.lastContact) msg += `Last contact: ${lc.lastContact}\n`;
+    if (lc.lastNote) msg += `Last note: ${lc.lastNote}\n`;
+    if (lc.notes?.length) {
+      msg += `\nNOTES HISTORY (${lc.notes.length} entries):\n`;
+      lc.notes.slice(0, 10).forEach((n: any) => {
+        msg += `[${n.date || 'unknown'}] ${n.content || n.text || ''}\n`;
+      });
+    }
+    msg += '\n';
+  }
+
+  msg += `Rep: ${repName}\nDealership: ${dealership}\n\n`;
+
+  if (payload.type === 'all') {
+    msg += `REP VOICE/TYPED INPUT:\n${payload.repInput}\n\n`;
+    msg += 'Generate ALL THREE outputs. You MUST produce all three labeled sections:\n';
+    msg += '1. TEXT (2-3 sentences max, no exclamation points, end with a question)\n';
+    msg += '2. EMAIL (subject + 3-4 sentence body + signature)\n';
+    msg += '3. CRM NOTE (plain text: date, contact type, summary, vehicle, intent, action, next step, notes)\n';
+    msg += 'Label each section clearly as TEXT, EMAIL, and CRM NOTE. Do not skip any section.\n';
+  } else if (payload.type === 'text') {
+    msg += `Generate a TEXT MESSAGE. CRITICAL: 2-3 sentences MAXIMUM. No more. End with one question. No exclamation points. No filler.\n`;
+    if (payload.repInput) msg += `Context: ${payload.repInput}\n`;
+  } else if (payload.type === 'email') {
+    msg += `Generate an EMAIL.\n`;
+    if (payload.repInput) msg += `Context: ${payload.repInput}\n`;
+  } else if (payload.type === 'crm') {
+    msg += `Generate a CRM NOTE.\n`;
+    if (payload.repInput) msg += `Context: ${payload.repInput}\n`;
+  } else {
+    msg += payload.repInput || 'Generate TEXT + EMAIL + CRM NOTE.\n';
+  }
+
+  return msg;
+}
+
+function parseSections(text: string) {
+  const textMatch = text.match(/(?:^|\n)TEXT\s*\n([\s\S]*?)(?=\n(?:EMAIL|CRM)|$)/i);
+  const emailMatch = text.match(/(?:^|\n)EMAIL\s*\n([\s\S]*?)(?=\n(?:CRM)|$)/i);
+  const crmMatch = text.match(/(?:^|\n)CRM(?: NOTE)?\s*\n([\s\S]*?)$/i);
+
+  return {
+    text: textMatch?.[1]?.trim() || '',
+    email: emailMatch?.[1]?.trim() || '',
+    crm: crmMatch?.[1]?.trim() || '',
+    raw: text,
+  };
+}

@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Concept A — Deal Recap in Left Panel</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f0f2f5; display: flex; height: 100vh; }
+
+  /* Left Panel (replaces My Tasks empty space) */
+  .left-panel {
+    width: 320px; background: #fff; border-right: 1px solid #dde1e6;
+    overflow-y: auto; flex-shrink: 0;
+  }
+  .lp-header {
+    padding: 12px 14px; border-bottom: 1px solid #e8eaed;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .lp-header h3 { font-size: 13px; font-weight: 600; color: #1a202c; }
+  .lp-header .badge { font-size: 10px; background: #2563eb; color: #fff; padding: 2px 8px; border-radius: 10px; }
+
+  .deal-card {
+    padding: 12px 14px; border-bottom: 1px solid #f0f2f5; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .deal-card:hover { background: #f8fafc; }
+  .deal-card.active { background: #eff6ff; border-left: 3px solid #2563eb; }
+
+  .dc-name { font-size: 14px; font-weight: 600; color: #1a202c; }
+  .dc-vehicle { font-size: 12px; color: #2563eb; margin-top: 1px; }
+  .dc-status {
+    display: inline-block; padding: 1px 6px; border-radius: 3px;
+    font-size: 9px; font-weight: 600; letter-spacing: 0.5px; margin-top: 4px;
+  }
+  .dc-status.hot { background: #fef2f2; color: #dc2626; }
+  .dc-status.warm { background: #fff7ed; color: #ea580c; }
+  .dc-status.cold { background: #f8fafc; color: #64748b; }
+  .dc-status.active { background: #f0fdf4; color: #16a34a; }
+
+  .dc-last {
+    font-size: 11px; color: #94a3b8; margin-top: 6px; line-height: 1.4;
+    border-left: 2px solid #e2e8f0; padding-left: 8px;
+  }
+  .dc-last .date { font-weight: 500; color: #64748b; }
+
+  .dc-next {
+    font-size: 11px; color: #2563eb; margin-top: 4px; font-weight: 500;
+  }
+
+  .dc-meta {
+    display: flex; gap: 8px; margin-top: 4px; font-size: 10px; color: #94a3b8;
+  }
+
+  /* Oper8er Sidebar */
+  .sidebar {
+    width: 320px; background: #fff; border-left: 1px solid #dde1e6;
+    flex-shrink: 0; overflow-y: auto; display: flex; flex-direction: column;
+  }
+  .sb-header {
+    padding: 12px 14px; border-bottom: 1px solid #e8eaed;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .sb-logo { font-size: 14px; font-weight: 700; color: #2563eb; letter-spacing: 3px; }
+
+  .sb-card { padding: 12px 14px; border-bottom: 1px solid #e8eaed; }
+  .sb-name { font-size: 15px; font-weight: 600; }
+  .sb-vehicle { font-size: 12px; color: #2563eb; margin-top: 2px; }
+  .sb-context { font-size: 11px; color: #16a34a; margin-top: 4px; }
+
+  /* Voice + Generate Selection */
+  .voice-section { padding: 14px; border-bottom: 1px solid #e8eaed; }
+  .voice-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .mic-btn {
+    width: 44px; height: 44px; border-radius: 50%; border: 2px solid #e2e8f0;
+    background: #f8fafc; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 18px;
+  }
+  .mic-status { font-size: 12px; color: #94a3b8; }
+
+  /* Output Selector Chips */
+  .output-chips {
+    display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;
+  }
+  .chip {
+    padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: 600;
+    border: 1.5px solid #e2e8f0; background: #fff; color: #64748b;
+    cursor: pointer; transition: all 0.15s; position: relative;
+  }
+  .chip.selected {
+    border-color: #2563eb; color: #2563eb; background: #eff6ff;
+  }
+  .chip.selected::after {
+    content: '';
+    position: absolute; top: -2px; right: -2px;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #16a34a; border: 1.5px solid #fff;
+  }
+
+  .gen-all-btn {
+    width: 100%; padding: 10px; background: #2563eb; color: #fff; border: none;
+    border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+
+  /* CRM area (center) */
+  .crm-area { flex: 1; background: #f5f6f8; padding: 20px; display: flex; align-items: center; justify-content: center; }
+  .crm-placeholder { color: #94a3b8; font-size: 14px; text-align: center; }
+
+  .label-a {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+    background: #2563eb; color: #fff; padding: 6px 16px; border-radius: 6px;
+    font-size: 12px; font-weight: 600; letter-spacing: 1px; z-index: 100;
+  }
+</style>
+</head>
+<body>
+
+<div class="label-a">CONCEPT A — Deal Recap in Left Panel</div>
+
+<!-- LEFT PANEL: Deal Recaps -->
+<div class="left-panel">
+  <div class="lp-header">
+    <h3>Deal Tracker</h3>
+    <span class="badge">6 Active</span>
+  </div>
+
+  <div class="deal-card active">
+    <div class="dc-name">Xavier Yanez</div>
+    <div class="dc-vehicle">2025 Subaru WRX Premium</div>
+    <div class="dc-status active">Active</div>
+    <div class="dc-last">
+      <span class="date">3/31 5:04p</span> — Sent initial text + email. Customer from Cargurus. Appointment set Wed 4/1 at 5PM for paperwork.
+    </div>
+    <div class="dc-next">Next: Confirm appointment tomorrow morning</div>
+    <div class="dc-meta">
+      <span>Source: Cargurus</span>
+      <span>Day 0</span>
+    </div>
+  </div>
+
+  <div class="deal-card">
+    <div class="dc-name">Chase Green</div>
+    <div class="dc-vehicle">2020 Ford F-150</div>
+    <div class="dc-status hot">Hot</div>
+    <div class="dc-last">
+      <span class="date">3/31</span> — Price drop on F-150. Customer not yet contacted about new price.
+    </div>
+    <div class="dc-next">Next: Call about price drop today</div>
+    <div class="dc-meta">
+      <span>Source: Facebook</span>
+      <span>Day 14</span>
+    </div>
+  </div>
+
+  <div class="deal-card">
+    <div class="dc-name">Antonio Roman</div>
+    <div class="dc-vehicle">2018 Subaru Crosstrek</div>
+    <div class="dc-status warm">Warm</div>
+    <div class="dc-last">
+      <span class="date">3/30</span> — Prospect viewed email. Long term follow up. Outside prospect walk-in.
+    </div>
+    <div class="dc-next">Next: Re-engage with new inventory option</div>
+    <div class="dc-meta">
+      <span>Source: Walk-in</span>
+      <span>Day 225</span>
+    </div>
+  </div>
+
+  <div class="deal-card">
+    <div class="dc-name">Theo Schuff</div>
+    <div class="dc-vehicle">2016 Subaru Forester</div>
+    <div class="dc-status cold">Long Term</div>
+    <div class="dc-last">
+      <span class="date">1/26</span> — Customer replied to email: "decided to buy a truck instead." Switching from electric to gas.
+    </div>
+    <div class="dc-next">Next: Follow up in January about gas vehicles</div>
+    <div class="dc-meta">
+      <span>Source: Dealer Site</span>
+      <span>Day 445</span>
+    </div>
+  </div>
+
+  <div class="deal-card">
+    <div class="dc-name">Emily Zuber</div>
+    <div class="dc-vehicle">2016 Subaru Forester</div>
+    <div class="dc-status cold">Cold</div>
+    <div class="dc-last">
+      <span class="date">1/15</span> — Called, customer no longer in market. Polite, no specific reason.
+    </div>
+    <div class="dc-next">Next: Nurture campaign in 6 months</div>
+    <div class="dc-meta">
+      <span>Source: Phone In</span>
+      <span>Day 75</span>
+    </div>
+  </div>
+
+  <div class="deal-card">
+    <div class="dc-name">Austin Harris</div>
+    <div class="dc-vehicle">2020 Ford F-150</div>
+    <div class="dc-status warm">Warm</div>
+    <div class="dc-last">
+      <span class="date">3/25</span> — Walk-in, test drove, liked the truck. Trade: 2007 F-150 Lariat, $3K value. Wants to think about it.
+    </div>
+    <div class="dc-next">Next: Follow up call this week</div>
+    <div class="dc-meta">
+      <span>Source: Phone In</span>
+      <span>Day 7</span>
+    </div>
+  </div>
+</div>
+
+<!-- CRM AREA (center) -->
+<div class="crm-area">
+  <div class="crm-placeholder">
+    ← VinSolutions Customer Dashboard would be here →
+  </div>
+</div>
+
+<!-- OPER8ER SIDEBAR (right) -->
+<div class="sidebar">
+  <div class="sb-header">
+    <span class="sb-logo">OPER8ER</span>
+    <span style="color:#94a3b8;cursor:pointer;font-size:18px">×</span>
+  </div>
+
+  <div class="sb-card">
+    <div class="sb-name">Xavier Yanez</div>
+    <div class="sb-vehicle">2025 Subaru WRX Premium</div>
+    <div style="font-size:11px;color:#64748b;margin-top:4px">Phone: (404) 715-4300</div>
+    <div style="font-size:11px;color:#64748b">Source: Cargurus | Day 0</div>
+    <div class="sb-context">✓ Context loaded — Xavier Yanez</div>
+  </div>
+
+  <div class="voice-section">
+    <div class="voice-row">
+      <div class="mic-btn">🎙</div>
+      <div class="mic-status">Tap to speak</div>
+    </div>
+
+    <div class="output-chips">
+      <div class="chip selected">Text Message</div>
+      <div class="chip selected">Email</div>
+      <div class="chip selected">CRM Note</div>
+    </div>
+
+    <textarea placeholder="Type what happened with this customer..." style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;font-family:inherit;resize:none;height:60px;outline:none;margin-bottom:8px"></textarea>
+
+    <button class="gen-all-btn">✨ Generate Selected</button>
+  </div>
+
+  <div style="padding:10px 14px;font-size:10px;color:#94a3b8;letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid #e8eaed">Generated Outputs</div>
+
+  <div style="padding:10px 14px">
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;margin-bottom:8px">
+      <div style="font-size:9px;font-weight:700;color:#2563eb;letter-spacing:1px;margin-bottom:4px">TEXT MESSAGE</div>
+      <div style="font-size:12px;line-height:1.5;color:#1a202c">Hey Xavier, looking forward to seeing you tomorrow at 5. I have everything ready for you on the WRX. Anything you need from me before then?</div>
+      <div style="display:flex;gap:4px;margin-top:6px">
+        <button style="padding:4px 8px;font-size:9px;font-weight:600;background:#f0f2f5;border:1px solid #dde1e6;border-radius:4px;cursor:pointer">Copy</button>
+        <button style="padding:4px 8px;font-size:9px;font-weight:600;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer">Pre-fill in CRM</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Toggle chip selection
+  document.querySelectorAll('.chip').forEach(chip => {
+    chip.addEventListener('click', () => chip.classList.toggle('selected'));
+  });
+</script>
+</body>
+</html>

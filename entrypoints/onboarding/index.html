@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Floq — Setup</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Inter,system-ui,-apple-system,sans-serif;background:#fafafa;color:#1a202c;min-height:100vh;display:flex;flex-direction:column;align-items:center}
+
+.progress{width:100%;max-width:640px;padding:32px 24px 0;display:flex;gap:8px;align-items:center}
+.step-dot{width:100%;height:4px;border-radius:2px;background:#e2e8f0;transition:background .3s}
+.step-dot.active{background:#6D28D9}
+.step-dot.done{background:#16a34a}
+.step-label{font-size:11px;color:#94a3b8;font-weight:600;letter-spacing:1px;margin-left:8px;white-space:nowrap}
+
+.screen{width:100%;max-width:640px;padding:24px;display:none;flex-direction:column;animation:fadeIn .3s}
+.screen.active{display:flex}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+.screen h1{font-size:24px;font-weight:800;color:#1a202c;margin-top:16px}
+.screen .sub{font-size:14px;color:#64748b;margin-top:6px;margin-bottom:28px;line-height:1.5}
+
+.field{margin-bottom:20px}
+.field label{display:block;font-size:11px;font-weight:600;color:#64748b;letter-spacing:1px;text-transform:uppercase;margin-bottom:5px}
+.field label .req{color:#ef4444}
+.field input,.field select,.field textarea{width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;font-family:inherit;outline:none;color:#1a202c;background:#fff}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:#6D28D9;box-shadow:0 0 0 3px rgba(109,40,217,.1)}
+.field textarea{resize:vertical;min-height:60px}
+.field .hint{font-size:11px;color:#94a3b8;margin-top:3px}
+.field .error{font-size:11px;color:#ef4444;margin-top:3px;display:none}
+.field .valid{font-size:11px;color:#16a34a;margin-top:3px;display:none}
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+/* Tone cards */
+.tone-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.tone-card{padding:14px;border:2px solid #e2e8f0;border-radius:10px;cursor:pointer;transition:all .15s;background:#fff}
+.tone-card:hover{border-color:#c4b5fd}
+.tone-card.selected{border-color:#6D28D9;background:#faf5ff}
+.tone-card .tc-name{font-size:13px;font-weight:700;color:#1a202c}
+.tone-card .tc-ex{font-size:11px;color:#64748b;margin-top:2px;font-style:italic}
+
+/* Toggle chips */
+.chip-grid{display:flex;flex-wrap:wrap;gap:6px}
+.chip-toggle{padding:6px 14px;border-radius:20px;font-size:12px;font-weight:600;border:1.5px solid #e2e8f0;background:#fff;color:#94a3b8;cursor:pointer;transition:all .15s;font-family:inherit}
+.chip-toggle.on{border-color:#6D28D9;color:#6D28D9;background:#faf5ff}
+
+/* Three-way toggle */
+.toggle3{display:flex;gap:4px;background:#f1f5f9;border-radius:8px;padding:3px}
+.toggle3 button{flex:1;padding:8px 12px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:#64748b;font-family:inherit;transition:all .15s}
+.toggle3 button.active{background:#6D28D9;color:#fff}
+
+/* Buttons */
+.btn-row{display:flex;gap:10px;margin-top:24px}
+.btn{padding:12px 32px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;border:none;font-family:inherit;transition:all .15s}
+.btn-primary{background:#6D28D9;color:#fff}
+.btn-primary:hover{background:#5b21b6}
+.btn-primary:disabled{background:#c4b5fd;cursor:not-allowed}
+.btn-secondary{background:#f1f5f9;color:#64748b}
+.btn-secondary:hover{background:#e2e8f0}
+
+/* Completion */
+.complete-card{text-align:center;padding:48px 24px}
+.complete-card h1{font-size:32px;margin-bottom:8px}
+.complete-name{font-size:20px;font-weight:700;color:#6D28D9;margin-top:16px}
+.complete-dealer{font-size:14px;color:#64748b;margin-top:4px}
+.complete-badges{display:flex;gap:8px;justify-content:center;margin-top:16px}
+.badge{padding:4px 12px;border-radius:12px;font-size:11px;font-weight:600;letter-spacing:0.5px}
+.badge-tone{background:#faf5ff;color:#6D28D9;border:1px solid #c4b5fd}
+.badge-license{background:#f0fdf4;color:#16a34a;border:1px solid #86efac}
+.complete-btn{margin-top:32px}
+
+.logo{font-size:13px;font-weight:700;color:#6D28D9;letter-spacing:4px;padding:24px;text-align:center}
+</style>
+</head>
+<body>
+
+<div class="logo">FLOQ</div>
+
+<div class="progress">
+  <div class="step-dot active" id="dot-1"></div>
+  <div class="step-dot" id="dot-2"></div>
+  <div class="step-dot" id="dot-3"></div>
+  <div class="step-dot" id="dot-4"></div>
+  <span class="step-label" id="step-label">Step 1 of 4</span>
+</div>
+
+<!-- SCREEN 1: WHO YOU ARE -->
+<div class="screen active" id="screen-1">
+  <h1>Let's build your Floq profile.</h1>
+  <div class="sub">This takes 2 minutes and makes every output sound exactly like you.</div>
+
+  <div class="field-row">
+    <div class="field"><label>First Name <span class="req">*</span></label><input id="s1-first" placeholder="Yancy"></div>
+    <div class="field"><label>Last Name <span class="req">*</span></label><input id="s1-last" placeholder="Garcia"></div>
+  </div>
+
+  <div class="field">
+    <label>Job Title <span class="req">*</span></label>
+    <select id="s1-title">
+      <option value="">Select your role</option>
+      <option>Sales Consultant</option>
+      <option>Internet Sales Manager</option>
+      <option>BDC Rep</option>
+      <option>Finance Manager</option>
+      <option>Sales Manager</option>
+      <option>General Manager</option>
+      <option value="other">Other</option>
+    </select>
+  </div>
+  <div class="field" id="s1-title-other-wrap" style="display:none">
+    <label>Custom Title</label>
+    <input id="s1-title-other" placeholder="Your title">
+  </div>
+
+  <div class="field">
+    <label>Years in Automotive Sales</label>
+    <select id="s1-years">
+      <option value="">Select</option>
+      <option>Less than 1 year</option>
+      <option>1-3 years</option>
+      <option>3-5 years</option>
+      <option>5-10 years</option>
+      <option>10+ years</option>
+    </select>
+  </div>
+
+  <div class="btn-row"><button class="btn btn-primary" id="btn-next-1">Continue</button></div>
+</div>
+
+<!-- SCREEN 2: WHERE YOU WORK -->
+<div class="screen" id="screen-2">
+  <h1>Tell us about your dealership.</h1>
+  <div class="sub">Floq uses this to make every message local and accurate.</div>
+
+  <div class="field"><label>Dealership Name <span class="req">*</span></label><input id="s2-dealer" placeholder="Stone's Auto Group"></div>
+
+  <div class="field-row">
+    <div class="field"><label>City <span class="req">*</span></label><input id="s2-city" placeholder="Jackson"></div>
+    <div class="field"><label>State <span class="req">*</span></label><input id="s2-state" placeholder="Wyoming" maxlength="20"></div>
+  </div>
+
+  <div class="field">
+    <label>License Key <span class="req">*</span></label>
+    <input id="s2-license" placeholder="stones-op8-2692-live">
+    <div class="hint">Provided by Floq when your dealership is activated</div>
+    <div class="valid" id="s2-license-ok">License validated</div>
+    <div class="error" id="s2-license-err">Invalid license key</div>
+  </div>
+
+  <div class="field">
+    <label>Primary CRM</label>
+    <select id="s2-crm">
+      <option value="">Select</option>
+      <option>VinSolutions</option>
+      <option>DealerSocket</option>
+      <option>CDK Global</option>
+      <option>Elead</option>
+      <option>Other</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label>Does your store salt roads in winter?</label>
+    <div class="toggle3" id="s2-salt">
+      <button >Yes</button>
+      <button class="active" >No</button>
+    </div>
+    <div class="hint">Affects how Floq handles rust and condition objections for trades</div>
+  </div>
+
+  <div class="field-row">
+    <div class="field">
+      <label>Avg New Car Price</label>
+      <select id="s2-avg-new"><option value="">Select</option><option>Under $35k</option><option>$35k-$50k</option><option>$50k-$75k</option><option>Over $75k</option></select>
+    </div>
+    <div class="field">
+      <label>Avg Used Car Price</label>
+      <select id="s2-avg-used"><option value="">Select</option><option>Under $35k</option><option>$35k-$50k</option><option>$50k-$75k</option><option>Over $75k</option></select>
+    </div>
+  </div>
+
+  <div class="field-row">
+    <div class="field"><label>Doc Fee ($)</label><input id="s2-docfee" type="number" placeholder="338"></div>
+    <div class="field"><label>State Sales Tax (%)</label><input id="s2-tax" type="number" step="0.01" placeholder="7.0"></div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-secondary" id="btn-prev-2">Back</button>
+    <button class="btn btn-primary" id="btn-next-2">Continue</button>
+  </div>
+</div>
+
+<!-- SCREEN 3: HOW YOU COMMUNICATE -->
+<div class="screen" id="screen-3">
+  <h1>How do you talk to customers?</h1>
+  <div class="sub">The more honest you are here, the better Floq sounds like you.</div>
+
+  <div class="field">
+    <label>Communication Tone</label>
+    <div class="tone-grid" id="s3-tone">
+      <div class="tone-card" data-tone="casual" ><div class="tc-name">Casual & friendly</div><div class="tc-ex">"Hey! Just wanted to check in..."</div></div>
+      <div class="tone-card selected" data-tone="professional" ><div class="tc-name">Professional & warm</div><div class="tc-ex">"Hi Sarah, I wanted to follow up..."</div></div>
+      <div class="tone-card" data-tone="direct" ><div class="tc-name">Direct & confident</div><div class="tc-ex">"Here's what I recommend..."</div></div>
+      <div class="tone-card" data-tone="formal" ><div class="tc-name">Formal & polished</div><div class="tc-ex">"Dear Mr. Johnson, I am writing..."</div></div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Do you use emojis in texts?</label>
+    <div class="toggle3" id="s3-emoji">
+      <button >Yes</button>
+      <button class="active" >Sometimes</button>
+      <button >Never</button>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Text Message Signature</label>
+    <input id="s3-textsig" placeholder="- Yancy @ Stone's Auto Group">
+  </div>
+
+  <div class="field">
+    <label>Email Sign-Off</label>
+    <input id="s3-emailsig" placeholder="Best, Yancy Garcia | Stone's Auto Group | 307-699-3743">
+  </div>
+
+  <div class="field">
+    <label>Languages</label>
+    <div class="chip-grid">
+      <button class="chip-toggle on" data-val="english" >English</button>
+      <button class="chip-toggle" data-val="spanish" >Spanish</button>
+    </div>
+    <div class="hint" id="s3-lang-hint" style="display:none">Floq will generate in the language that matches your customer's communication style.</div>
+  </div>
+
+  <div class="field">
+    <label>One sentence about how you like to sell</label>
+    <textarea id="s3-philosophy" maxlength="200" placeholder="I focus on building trust first and never pressure customers. I want them to feel like they're buying, not being sold."></textarea>
+    <div class="hint"><span id="s3-phil-count">0</span>/200</div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-secondary" id="btn-prev-3">Back</button>
+    <button class="btn btn-primary" id="btn-next-3">Continue</button>
+  </div>
+</div>
+
+<!-- SCREEN 4: YOUR CUSTOMERS -->
+<div class="screen" id="screen-4">
+  <h1>Who are you usually selling to?</h1>
+  <div class="sub">This helps Floq match the right energy for your market.</div>
+
+  <div class="field">
+    <label>Primary Customer Types (select all that apply)</label>
+    <div class="chip-grid" id="s4-customers">
+      <button class="chip-toggle" data-val="first-time" >First-time buyers</button>
+      <button class="chip-toggle" data-val="repeat" >Repeat customers</button>
+      <button class="chip-toggle" data-val="credit-challenged" >Credit-challenged</button>
+      <button class="chip-toggle" data-val="fleet" >Fleet buyers</button>
+      <button class="chip-toggle" data-val="luxury" >Luxury buyers</button>
+      <button class="chip-toggle" data-val="young" >Young buyers (under 30)</button>
+      <button class="chip-toggle" data-val="families" >Families</button>
+      <button class="chip-toggle" data-val="spanish-speaking" >Spanish-speaking</button>
+      <button class="chip-toggle" data-val="small-biz" >Small business owners</button>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Most Common Objections (select all that apply)</label>
+    <div class="chip-grid" id="s4-objections">
+      <button class="chip-toggle" data-val="rate-shock" >Rate shock / high payment</button>
+      <button class="chip-toggle" data-val="price" >Price too high</button>
+      <button class="chip-toggle" data-val="trade" >Trade value dispute</button>
+      <button class="chip-toggle" data-val="spouse" >Need to talk to spouse</button>
+      <button class="chip-toggle" data-val="credit" >Credit concerns</button>
+      <button class="chip-toggle" data-val="just-looking" >Not ready / just looking</button>
+      <button class="chip-toggle" data-val="competitor" >Competitor comparison</button>
+      <button class="chip-toggle" data-val="availability" >Vehicle availability</button>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>What is your market like?</label>
+    <div class="tone-grid">
+      <div class="tone-card" data-market="rural" ><div class="tc-name">Rural / small town</div></div>
+      <div class="tone-card" data-market="suburban" ><div class="tc-name">Suburban</div></div>
+      <div class="tone-card" data-market="urban" ><div class="tc-name">Urban</div></div>
+      <div class="tone-card" data-market="resort" ><div class="tc-name">Resort / tourist area</div></div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>One thing your customers always ask about</label>
+    <textarea id="s4-custnote" maxlength="200" placeholder="They always ask about financing options and whether we can beat their bank rate."></textarea>
+    <div class="hint"><span id="s4-note-count">0</span>/200</div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-secondary" id="btn-prev-4">Back</button>
+    <button class="btn btn-primary" id="btn-finish">Complete Setup</button>
+  </div>
+</div>
+
+<!-- SCREEN 5: COMPLETION -->
+<div class="screen" id="screen-5">
+  <div class="complete-card">
+    <h1>You're ready.</h1>
+    <div class="complete-name" id="comp-name"></div>
+    <div class="complete-dealer" id="comp-dealer"></div>
+    <div class="complete-badges">
+      <span class="badge badge-tone" id="comp-tone"></span>
+      <span class="badge badge-license">License Active</span>
+    </div>
+    <div class="complete-btn">
+      <button class="btn btn-primary" id="btn-open" style="padding:14px 48px;font-size:16px">Open Floq</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./main.ts"></script>
+</body>
+</html>

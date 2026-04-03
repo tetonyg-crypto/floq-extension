@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Concept B — Deal Recap Inside Sidebar</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f0f2f5; display: flex; height: 100vh; }
+
+  /* Left panel stays as VinSolutions tasks */
+  .left-panel {
+    width: 320px; background: #fff; border-right: 1px solid #dde1e6;
+    flex-shrink: 0; overflow-y: auto; padding: 16px;
+    color: #94a3b8; font-size: 13px; display: flex; align-items: center; justify-content: center;
+  }
+
+  /* CRM area (center) */
+  .crm-area { flex: 1; background: #f5f6f8; display: flex; align-items: center; justify-content: center; }
+  .crm-placeholder { color: #94a3b8; font-size: 14px; text-align: center; }
+
+  /* Oper8er Sidebar with Deal Recap */
+  .sidebar {
+    width: 340px; background: #fff; border-left: 1px solid #dde1e6;
+    flex-shrink: 0; overflow-y: auto; display: flex; flex-direction: column;
+  }
+  .sb-header {
+    padding: 12px 14px; border-bottom: 1px solid #e8eaed;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .sb-logo { font-size: 14px; font-weight: 700; color: #2563eb; letter-spacing: 3px; }
+
+  .sb-card { padding: 12px 14px; border-bottom: 1px solid #e8eaed; }
+  .sb-name { font-size: 15px; font-weight: 600; }
+  .sb-vehicle { font-size: 12px; color: #2563eb; margin-top: 2px; }
+  .sb-context { font-size: 11px; color: #16a34a; margin-top: 4px; }
+  .sb-details { font-size: 11px; color: #64748b; margin-top: 4px; line-height: 1.5; }
+
+  /* Deal Recap Section */
+  .deal-recap {
+    padding: 10px 14px; border-bottom: 1px solid #e8eaed;
+    background: #fafbfc;
+  }
+  .dr-label {
+    font-size: 9px; font-weight: 700; letter-spacing: 1.5px; color: #2563eb;
+    text-transform: uppercase; margin-bottom: 6px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .dr-label .dot { width: 6px; height: 6px; border-radius: 50%; background: #16a34a; }
+
+  .dr-timeline { position: relative; padding-left: 16px; }
+  .dr-timeline::before {
+    content: ''; position: absolute; left: 4px; top: 4px; bottom: 4px;
+    width: 1.5px; background: #e2e8f0;
+  }
+
+  .dr-entry { position: relative; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #f0f2f5; }
+  .dr-entry:last-child { border-bottom: none; margin-bottom: 0; }
+  .dr-entry::before {
+    content: ''; position: absolute; left: -14px; top: 5px;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #2563eb; border: 1.5px solid #fff;
+  }
+  .dr-entry.old::before { background: #94a3b8; }
+
+  .dr-date { font-size: 10px; color: #94a3b8; font-weight: 500; }
+  .dr-text { font-size: 11px; color: #1a202c; line-height: 1.4; margin-top: 2px; }
+  .dr-action { font-size: 10px; color: #2563eb; font-weight: 500; margin-top: 2px; }
+
+  /* Next Step Card */
+  .next-step {
+    margin: 0 14px 10px; padding: 8px 10px;
+    background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px;
+  }
+  .ns-label { font-size: 9px; font-weight: 700; color: #2563eb; letter-spacing: 1px; margin-bottom: 2px; }
+  .ns-text { font-size: 12px; color: #1a202c; font-weight: 500; }
+
+  /* Voice + Output Selection */
+  .voice-section { padding: 12px 14px; border-bottom: 1px solid #e8eaed; }
+  .voice-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .mic-btn {
+    width: 40px; height: 40px; border-radius: 50%; border: 2px solid #e2e8f0;
+    background: #f8fafc; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 16px;
+  }
+  .mic-status { font-size: 12px; color: #94a3b8; }
+
+  .output-chips { display: flex; gap: 5px; margin-bottom: 8px; }
+  .chip {
+    padding: 4px 10px; border-radius: 16px; font-size: 10px; font-weight: 600;
+    border: 1.5px solid #e2e8f0; background: #fff; color: #64748b;
+    cursor: pointer; transition: all 0.15s; position: relative;
+  }
+  .chip.selected { border-color: #2563eb; color: #2563eb; background: #eff6ff; }
+  .chip.selected::after {
+    content: ''; position: absolute; top: -2px; right: -2px;
+    width: 7px; height: 7px; border-radius: 50%; background: #16a34a; border: 1.5px solid #fff;
+  }
+
+  .gen-btn {
+    width: 100%; padding: 9px; background: #2563eb; color: #fff; border: none;
+    border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+
+  .output-area { padding: 10px 14px; flex: 1; }
+  .out-card {
+    background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;
+    padding: 10px; margin-bottom: 8px;
+  }
+  .out-label { font-size: 9px; font-weight: 700; color: #2563eb; letter-spacing: 1px; margin-bottom: 4px; }
+  .out-text { font-size: 12px; line-height: 1.5; color: #1a202c; }
+  .out-btns { display: flex; gap: 4px; margin-top: 6px; }
+  .out-btns button {
+    padding: 4px 8px; font-size: 9px; font-weight: 600; border-radius: 4px;
+    cursor: pointer; font-family: inherit;
+  }
+  .btn-copy { background: #f0f2f5; border: 1px solid #dde1e6; color: #475569; }
+  .btn-crm { background: #2563eb; border: none; color: #fff; }
+  .btn-sec { background: #475569; border: none; color: #fff; }
+
+  .label-b {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+    background: #16a34a; color: #fff; padding: 6px 16px; border-radius: 6px;
+    font-size: 12px; font-weight: 600; letter-spacing: 1px; z-index: 100;
+  }
+</style>
+</head>
+<body>
+
+<div class="label-b">CONCEPT B — Deal Recap Inside Sidebar</div>
+
+<!-- Left panel (VinSolutions tasks — untouched) -->
+<div class="left-panel">
+  VinSolutions My Tasks panel stays here untouched
+</div>
+
+<!-- CRM area -->
+<div class="crm-area">
+  <div class="crm-placeholder">← VinSolutions Customer Dashboard →</div>
+</div>
+
+<!-- OPER8ER SIDEBAR with Deal Recap built in -->
+<div class="sidebar">
+  <div class="sb-header">
+    <span class="sb-logo">OPER8ER</span>
+    <span style="color:#94a3b8;cursor:pointer;font-size:18px">×</span>
+  </div>
+
+  <!-- Customer Card -->
+  <div class="sb-card">
+    <div class="sb-name">Xavier Yanez</div>
+    <div class="sb-vehicle">2025 Subaru WRX Premium</div>
+    <div class="sb-details">Phone: (404) 715-4300 | Source: Cargurus | Day 0</div>
+    <div class="sb-context">✓ Context loaded</div>
+  </div>
+
+  <!-- Next Step (prominent) -->
+  <div style="padding: 10px 14px 0">
+    <div class="next-step">
+      <div class="ns-label">NEXT STEP</div>
+      <div class="ns-text">Confirm appointment tomorrow 5PM. Have paperwork ready.</div>
+    </div>
+  </div>
+
+  <!-- Deal Recap Timeline -->
+  <div class="deal-recap">
+    <div class="dr-label">
+      <span>DEAL TIMELINE</span>
+      <span class="dot"></span>
+    </div>
+    <div class="dr-timeline">
+      <div class="dr-entry">
+        <div class="dr-date">3/31/26 5:04p</div>
+        <div class="dr-text">Initial text + email sent. Appointment set Wed 4/1 5PM for paperwork.</div>
+        <div class="dr-action">→ Outbound text + email</div>
+      </div>
+      <div class="dr-entry">
+        <div class="dr-date">3/31/26 5:02p</div>
+        <div class="dr-text">New internet lead from Cargurus. 2025 WRX Premium. Salt Lake City customer.</div>
+        <div class="dr-action">→ Lead received</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Voice + Generate -->
+  <div class="voice-section">
+    <div class="voice-row">
+      <div class="mic-btn">🎙</div>
+      <div class="mic-status">Tap to speak</div>
+    </div>
+
+    <div class="output-chips">
+      <div class="chip selected">Text</div>
+      <div class="chip selected">Email</div>
+      <div class="chip selected">CRM Note</div>
+    </div>
+
+    <textarea placeholder="Type or dictate..." style="width:100%;padding:7px;border:1px solid #e2e8f0;border-radius:6px;font-size:11px;font-family:inherit;resize:none;height:50px;outline:none;margin-bottom:6px"></textarea>
+
+    <button class="gen-btn">✨ Generate Selected</button>
+  </div>
+
+  <!-- Generated Outputs -->
+  <div class="output-area">
+    <div class="out-card">
+      <div class="out-label">TEXT MESSAGE</div>
+      <div class="out-text">Hey Xavier, looking forward to seeing you tomorrow at 5. I have everything ready for you on the WRX. Anything you need from me before then?</div>
+      <div class="out-btns">
+        <button class="btn-copy">Copy</button>
+        <button class="btn-crm">Pre-fill in CRM</button>
+        <button class="btn-sec">Log iMessage</button>
+      </div>
+    </div>
+
+    <div class="out-card">
+      <div class="out-label">CRM NOTE</div>
+      <div class="out-text">4/1/26 Outbound Follow-up Yancy Garcia<br>Contact Type: Text/Email<br>Summary: Confirmed appointment for 4/1 at 5PM...<br>Intent Level: Hot<br>Next Step: Have paperwork ready for delivery</div>
+      <div class="out-btns">
+        <button class="btn-copy">Copy</button>
+        <button class="btn-crm">Log to VinSolutions</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.querySelectorAll('.chip').forEach(chip => {
+    chip.addEventListener('click', () => chip.classList.toggle('selected'));
+  });
+</script>
+</body>
+</html>

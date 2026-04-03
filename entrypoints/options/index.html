@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Floq — Profile Settings</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Inter,system-ui,-apple-system,sans-serif;background:#fafafa;padding:32px 24px;color:#1a202c}
+.wrap{max-width:600px;margin:0 auto}
+h1{font-size:13px;font-weight:700;color:#6D28D9;letter-spacing:4px;margin-bottom:4px}
+.sub{font-size:13px;color:#94a3b8;margin-bottom:24px}
+
+.section{background:#fff;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:12px;overflow:hidden}
+.section-header{padding:14px 18px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:700;color:#1a202c;user-select:none}
+.section-header:hover{background:#faf5ff}
+.section-header .arrow{color:#94a3b8;font-size:16px;transition:transform .2s}
+.section-header .arrow.open{transform:rotate(180deg)}
+.section-body{padding:0 18px 18px;display:none}
+.section-body.open{display:block}
+
+label{display:block;font-size:11px;font-weight:600;color:#64748b;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;margin-top:14px}
+label:first-child{margin-top:0}
+input,select,textarea{width:100%;padding:9px 12px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;font-family:inherit;outline:none;color:#1a202c}
+input:focus,select:focus,textarea:focus{border-color:#6D28D9;box-shadow:0 0 0 3px rgba(109,40,217,.08)}
+textarea{resize:vertical;min-height:50px}
+.hint{font-size:10px;color:#94a3b8;margin-top:2px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+.save-btn{margin-top:10px;padding:8px 20px;background:#6D28D9;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
+.save-btn:hover{background:#5b21b6}
+.saved{font-size:11px;color:#16a34a;display:inline-block;margin-left:10px;opacity:0;transition:opacity .3s}
+.saved.show{opacity:1}
+
+.preview{background:#0a0a0f;border-radius:8px;padding:14px;margin-top:24px;font-family:'Courier New',monospace;font-size:11px;color:#a5b4fc;line-height:1.5;white-space:pre-wrap;max-height:300px;overflow-y:auto}
+.preview-label{font-size:11px;font-weight:600;color:#64748b;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px}
+
+.no-profile{text-align:center;padding:48px;color:#94a3b8}
+.no-profile button{margin-top:16px;padding:10px 24px;background:#6D28D9;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>FLOQ</h1>
+  <div class="sub">Profile Settings</div>
+
+  <div id="no-profile" class="no-profile" style="display:none">
+    <p>No profile found. Complete onboarding to set up your Floq profile.</p>
+    <button onclick="chrome.runtime.getURL && window.open(chrome.runtime.getURL('onboarding.html'))">Start Setup</button>
+  </div>
+
+  <div id="settings-body" style="display:none">
+
+    <!-- WHO YOU ARE -->
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">Who You Are <span class="arrow open">&#9662;</span></div>
+      <div class="section-body open">
+        <div class="row">
+          <div><label>First Name</label><input id="p-first"></div>
+          <div><label>Last Name</label><input id="p-last"></div>
+        </div>
+        <label>Job Title</label><input id="p-title">
+        <label>Years in Automotive</label><input id="p-years" readonly>
+        <button class="save-btn" onclick="saveSection('identity')">Save</button><span class="saved" id="save-identity">Saved</span>
+      </div>
+    </div>
+
+    <!-- WHERE YOU WORK -->
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">Where You Work <span class="arrow">&#9662;</span></div>
+      <div class="section-body">
+        <label>Dealership</label><input id="p-dealer">
+        <div class="row">
+          <div><label>City</label><input id="p-city"></div>
+          <div><label>State</label><input id="p-state"></div>
+        </div>
+        <label>License Key</label><input id="p-license">
+        <label>Primary CRM</label><input id="p-crm">
+        <div class="row">
+          <div><label>Doc Fee ($)</label><input id="p-docfee" type="number"></div>
+          <div><label>Tax Rate (%)</label><input id="p-tax" type="number" step="0.01"></div>
+        </div>
+        <label>Salt Roads</label><input id="p-salt" readonly>
+        <button class="save-btn" onclick="saveSection('dealership')">Save</button><span class="saved" id="save-dealership">Saved</span>
+      </div>
+    </div>
+
+    <!-- HOW YOU COMMUNICATE -->
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">How You Communicate <span class="arrow">&#9662;</span></div>
+      <div class="section-body">
+        <label>Tone</label><input id="p-tone">
+        <label>Emojis</label><input id="p-emojis">
+        <label>Text Signature</label><input id="p-textsig">
+        <label>Email Sign-Off</label><input id="p-emailsig">
+        <label>Languages</label><input id="p-langs">
+        <label>Selling Philosophy</label><textarea id="p-philosophy" maxlength="200"></textarea>
+        <button class="save-btn" onclick="saveSection('voice')">Save</button><span class="saved" id="save-voice">Saved</span>
+      </div>
+    </div>
+
+    <!-- YOUR CUSTOMERS -->
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">Your Customers <span class="arrow">&#9662;</span></div>
+      <div class="section-body">
+        <label>Customer Types</label><input id="p-custtypes" readonly>
+        <label>Common Objections</label><input id="p-objections" readonly>
+        <label>Market Type</label><input id="p-market">
+        <label>Customer Note</label><textarea id="p-custnote" maxlength="200"></textarea>
+        <button class="save-btn" onclick="saveSection('market')">Save</button><span class="saved" id="save-market">Saved</span>
+      </div>
+    </div>
+
+    <!-- CONTEXT PREVIEW -->
+    <div class="preview-label">What Floq knows about you (injected into every prompt):</div>
+    <div class="preview" id="ctx-preview">Loading...</div>
+  </div>
+</div>
+
+<script>
+let profile = null;
+
+chrome.storage.sync.get(['profile', 'profile_onboarded'], d => {
+  if (!d.profile_onboarded) {
+    document.getElementById('no-profile').style.display = 'block';
+    return;
+  }
+  try { profile = JSON.parse(d.profile); } catch(e) { profile = {}; }
+  document.getElementById('settings-body').style.display = 'block';
+  loadFields();
+  renderPreview();
+});
+
+function loadFields() {
+  const id = profile.identity || {};
+  const dl = profile.dealership || {};
+  const vc = profile.voice || {};
+  const mk = profile.market || {};
+  document.getElementById('p-first').value = id.firstName || '';
+  document.getElementById('p-last').value = id.lastName || '';
+  document.getElementById('p-title').value = id.jobTitle || '';
+  document.getElementById('p-years').value = id.yearsExperience || '';
+  document.getElementById('p-dealer').value = dl.name || '';
+  document.getElementById('p-city').value = dl.city || '';
+  document.getElementById('p-state').value = dl.state || '';
+  document.getElementById('p-license').value = dl.licenseKey || '';
+  document.getElementById('p-crm').value = dl.crm || '';
+  document.getElementById('p-docfee').value = dl.docFee || '';
+  document.getElementById('p-tax').value = dl.taxRate || '';
+  document.getElementById('p-salt').value = dl.saltRoads || 'no';
+  document.getElementById('p-tone').value = vc.tone || '';
+  document.getElementById('p-emojis').value = vc.emojis || '';
+  document.getElementById('p-textsig').value = vc.textSignature || '';
+  document.getElementById('p-emailsig').value = vc.emailSignoff || '';
+  document.getElementById('p-langs').value = (vc.languages || []).join(', ');
+  document.getElementById('p-philosophy').value = vc.philosophy || '';
+  document.getElementById('p-custtypes').value = (mk.customerTypes || []).join(', ');
+  document.getElementById('p-objections').value = (mk.objections || []).join(', ');
+  document.getElementById('p-market').value = mk.marketType || '';
+  document.getElementById('p-custnote').value = mk.customerNote || '';
+  // API key field removed — all calls go through Railway proxy
+}
+
+function saveSection(section) {
+  if (section === 'identity') {
+    profile.identity.firstName = document.getElementById('p-first').value.trim();
+    profile.identity.lastName = document.getElementById('p-last').value.trim();
+    profile.identity.jobTitle = document.getElementById('p-title').value.trim();
+  } else if (section === 'dealership') {
+    profile.dealership.name = document.getElementById('p-dealer').value.trim();
+    profile.dealership.city = document.getElementById('p-city').value.trim();
+    profile.dealership.state = document.getElementById('p-state').value.trim();
+    profile.dealership.licenseKey = document.getElementById('p-license').value.trim();
+    profile.dealership.crm = document.getElementById('p-crm').value.trim();
+    profile.dealership.docFee = document.getElementById('p-docfee').value.trim();
+    profile.dealership.taxRate = document.getElementById('p-tax').value.trim();
+  } else if (section === 'voice') {
+    profile.voice.tone = document.getElementById('p-tone').value.trim();
+    profile.voice.emojis = document.getElementById('p-emojis').value.trim();
+    profile.voice.textSignature = document.getElementById('p-textsig').value.trim();
+    profile.voice.emailSignoff = document.getElementById('p-emailsig').value.trim();
+    profile.voice.philosophy = document.getElementById('p-philosophy').value.trim();
+  } else if (section === 'market') {
+    profile.market.marketType = document.getElementById('p-market').value.trim();
+    profile.market.customerNote = document.getElementById('p-custnote').value.trim();
+  }
+
+  chrome.storage.sync.set({
+    profile: JSON.stringify(profile),
+    rep_name: (profile.identity.firstName + ' ' + profile.identity.lastName).trim(),
+    dealership: profile.dealership.name,
+    dealer_token: profile.dealership.licenseKey
+  }, () => {
+    const el = document.getElementById('save-' + section);
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 2000);
+    renderPreview();
+  });
+}
+
+function renderPreview() {
+  const id = profile.identity || {};
+  const dl = profile.dealership || {};
+  const vc = profile.voice || {};
+  const mk = profile.market || {};
+  let ctx = 'REP PROFILE:\n';
+  ctx += `Name: ${id.firstName || ''} ${id.lastName || ''}\n`;
+  if (id.jobTitle) ctx += `Title: ${id.jobTitle}\n`;
+  if (id.yearsExperience) ctx += `Experience: ${id.yearsExperience}\n`;
+  ctx += `Dealership: ${dl.name || ''}\n`;
+  if (dl.city && dl.state) ctx += `Location: ${dl.city}, ${dl.state}\n`;
+  if (dl.crm) ctx += `CRM: ${dl.crm}\n`;
+  if (mk.marketType) ctx += `Market type: ${mk.marketType}\n`;
+  if (dl.saltRoads) ctx += `Road salting: ${dl.saltRoads}\n`;
+  if (dl.docFee) ctx += `Doc fee: $${dl.docFee}\n`;
+  if (dl.taxRate) ctx += `Tax rate: ${dl.taxRate}%\n`;
+  ctx += '\nCOMMUNICATION STYLE:\n';
+  if (vc.tone) ctx += `Tone: ${vc.tone}\n`;
+  if (vc.emojis) ctx += `Emojis: ${vc.emojis}\n`;
+  if (vc.textSignature) ctx += `Text signature: ${vc.textSignature}\n`;
+  if (vc.emailSignoff) ctx += `Email sign-off: ${vc.emailSignoff}\n`;
+  if (vc.languages?.length) ctx += `Languages: ${vc.languages.join(', ')}\n`;
+  if (vc.philosophy) ctx += `Selling philosophy: ${vc.philosophy}\n`;
+  if (mk.customerTypes?.length || mk.objections?.length || mk.customerNote) {
+    ctx += '\nCUSTOMER CONTEXT:\n';
+    if (mk.customerTypes?.length) ctx += `Customer types: ${mk.customerTypes.join(', ')}\n`;
+    if (mk.objections?.length) ctx += `Common objections: ${mk.objections.join(', ')}\n`;
+    if (mk.customerNote) ctx += `Market notes: ${mk.customerNote}\n`;
+  }
+  document.getElementById('ctx-preview').textContent = ctx;
+}
+
+function toggleSection(header) {
+  const body = header.nextElementSibling;
+  const arrow = header.querySelector('.arrow');
+  body.classList.toggle('open');
+  arrow.classList.toggle('open');
+}
+</script>
+</body>
+</html>
