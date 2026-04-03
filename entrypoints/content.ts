@@ -1,17 +1,33 @@
 /**
- * Oper8er — Universal Content Script
- * Runs on every website. Context-aware: auto-scans on VinSolutions, manual input everywhere else.
- * Platform-adaptive output labels. Logs detected platform to Supabase.
+ * Floq — Platform-Aware Content Script v1.5.1
+ * Single injection per page. Platform detection controls UI, position, and features.
+ * Runs on VinSolutions, Gmail, Facebook, LinkedIn, WhatsApp — never injects twice.
  */
 
 import './content/styles.css';
 
+// ===== PLATFORM DETECTION (module-level) =====
+type Platform = 'vinsolutions' | 'gmail' | 'facebook' | 'linkedin' | 'whatsapp' | 'unknown';
+
+function detectPlatform(): Platform {
+  const url = window.location.href;
+  if (url.includes('vinsolutions') || url.includes('coxautoinc')) return 'vinsolutions';
+  if (url.includes('mail.google.com')) return 'gmail';
+  if (url.includes('facebook.com') || url.includes('messenger.com')) return 'facebook';
+  if (url.includes('linkedin.com')) return 'linkedin';
+  if (url.includes('web.whatsapp.com')) return 'whatsapp';
+  return 'unknown';
+}
+
+const PLATFORM = detectPlatform();
+
 export default defineContentScript({
   matches: [
     '*://*.vinsolutions.com/*',
-    '*://*.coxautoinc.com/*',
+    '*://vinsolutions.app.coxautoinc.com/*',
     '*://mail.google.com/*',
-    '*://www.facebook.com/*',
+    '*://*.facebook.com/*',
+    '*://www.messenger.com/*',
     '*://www.linkedin.com/*',
     '*://web.whatsapp.com/*'
   ],
@@ -19,32 +35,22 @@ export default defineContentScript({
   runAt: 'document_idle',
 
   main() {
-    // ===== PLATFORM DETECTION =====
-    const hostname = window.location.hostname || '';
-    const isVinSolutions = hostname.includes('vinsolutions') || hostname.includes('coxautoinc');
-    const isGmail = hostname === 'mail.google.com';
-    const isOutlook = hostname.includes('outlook.live.com') || hostname.includes('outlook.office');
-    const isFacebook = hostname.includes('facebook.com');
-    const isLinkedIn = hostname.includes('linkedin.com');
+    // ===== FIX 1: Platform guard — unknown platforms get nothing =====
+    if (PLATFORM === 'unknown') return;
 
-    function detectPlatform(): string {
-      if (isVinSolutions) return 'vinsolutions';
-      if (isGmail) return 'gmail';
-      if (isOutlook) return 'outlook';
-      if (isFacebook) return 'facebook';
-      if (isLinkedIn) return 'linkedin';
-      return 'other';
-    }
+    const isVinSolutions = PLATFORM === 'vinsolutions';
+    const isGmail = PLATFORM === 'gmail';
+    const isFacebook = PLATFORM === 'facebook';
+    const isLinkedIn = PLATFORM === 'linkedin';
 
     function getOutputLabels(): { text: string; email: string; crm: string } {
       if (isVinSolutions) return { text: 'TEXT MESSAGE', email: 'EMAIL', crm: 'CRM NOTE' };
-      if (isGmail || isOutlook) return { text: 'REPLY', email: 'EMAIL REPLY', crm: 'NOTE' };
+      if (isGmail) return { text: 'REPLY', email: 'EMAIL REPLY', crm: 'NOTE' };
       if (isFacebook) return { text: 'MESSAGE REPLY', email: 'EMAIL', crm: 'NOTE' };
       if (isLinkedIn) return { text: 'LINKEDIN REPLY', email: 'EMAIL', crm: 'NOTE' };
       return { text: 'REPLY', email: 'EMAIL', crm: 'NOTE' };
     }
 
-    const platform = detectPlatform();
     const outputLabels = getOutputLabels();
 
     // ===== ADDNOTE POPUP RECEIVER (VinSolutions only) =====
@@ -83,13 +89,14 @@ export default defineContentScript({
         const features = resp?.features || {};
         if (features[feature]) return true;
 
-        // Show gated message
         if (feature === 'gm_dashboard') {
           outputEl.innerHTML = '<div style="padding:14px;background:#F0EFFF;border:1px solid #7F77DD;border-radius:8px;margin:8px 14px;font-size:12px;line-height:1.6;color:#534AB7">Floor insights are available in Floq Command. Ask your GM to upgrade at floqsales.com</div>';
         } else if (feature === 'voice_coach' || feature === 'command_mode') {
           outputEl.innerHTML = '<div style="padding:14px;background:#F0EFFF;border:1px solid #7F77DD;border-radius:8px;margin:8px 14px;font-size:12px;line-height:1.6;color:#534AB7">This feature is available in Floq Command starting at $4,999/mo. Talk to your account manager.</div>';
         } else if (feature === 'facebook' || feature === 'gmail' || feature === 'linkedin') {
           outputEl.innerHTML = '<div style="padding:14px;background:#F0EFFF;border:1px solid #7F77DD;border-radius:8px;margin:8px 14px;font-size:12px;line-height:1.6;color:#534AB7">Cross-platform generation is available in Floq Command starting at $4,999/mo. Talk to your account manager.</div>';
+        } else if (feature === 'context_reply' || feature === 'voice_dictation') {
+          outputEl.innerHTML = '<div style="padding:14px;background:#F0EFFF;border:1px solid #7F77DD;border-radius:8px;margin:8px 14px;font-size:12px;line-height:1.6;color:#534AB7">This feature is available in Floq Command starting at $4,999/mo. Talk to your account manager.</div>';
         }
         return false;
       } catch(e) { return true; } // Fail open so demo doesn't break
@@ -169,7 +176,7 @@ export default defineContentScript({
 
     // ===== FRAME ROLE DETECTION =====
     const bodyText = document.body?.innerText || '';
-    const isUIFrame = bodyText.length > 2000 || !isVinSolutions; // Non-VIN pages are always the UI frame
+    const isUIFrame = bodyText.length > 2000 || !isVinSolutions;
 
     // ===== VINSOLUTIONS AUTO-SCAN (conditional) =====
     if (isVinSolutions) {
@@ -220,16 +227,22 @@ export default defineContentScript({
     // On VinSolutions: skip tiny utility iframes
     if (isVinSolutions && bodyText.length < 500) return;
 
-    // ===== PILL BUTTON (UNIVERSAL) =====
-    // Skip if pill already exists (prevents duplicates in iframe-heavy pages)
+    // ===== FIX 2: Single injection guard — bail if sidebar already exists =====
+    if (document.getElementById('floq-sidebar')) return;
     if (document.getElementById('oper8er-pill')) return;
+    if (document.getElementById('oper8er-host')) return;
 
+    // ===== PILL BUTTON (UNIVERSAL) =====
     const pill = document.createElement('div');
     pill.id = 'oper8er-pill';
     pill.textContent = '⚡ FQ';
+
+    // FIX 3: Platform-specific pill position
+    const pillSide = isVinSolutions ? 'left' : 'right';
     Object.assign(pill.style, {
-      position:'fixed', right:'0', top:'50%', transform:'translateY(-50%)', zIndex:'2147483646',
-      background:'#7F77DD', color:'#fff', padding:'6px 8px 6px 6px', borderRadius:'6px 0 0 6px',
+      position:'fixed', [pillSide]:'0', top:'50%', transform:'translateY(-50%)', zIndex:'2147483646',
+      background:'#7F77DD', color:'#fff', padding:'6px 8px 6px 6px',
+      borderRadius: isVinSolutions ? '0 6px 6px 0' : '6px 0 0 6px',
       fontSize:'11px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'pointer',
       boxShadow:'0 2px 8px rgba(37,99,235,0.25)', letterSpacing:'0.5px', opacity:'0.85',
       transition:'opacity 0.15s, padding 0.15s'
@@ -239,13 +252,41 @@ export default defineContentScript({
     pill.onclick = () => { sidebarOpen ? closeSidebar() : openSidebar(); };
     document.body.appendChild(pill);
 
+    // ===== FIX 4: Platform badge config =====
+    function getPlatformBadge(): { label: string; color: string; bg: string } {
+      switch (PLATFORM) {
+        case 'vinsolutions': return { label: 'VinSolutions', color: '#7F77DD', bg: '#F0EFFF' };
+        case 'gmail': return { label: 'Gmail', color: '#dc2626', bg: '#fef2f2' };
+        case 'facebook': return { label: 'Facebook', color: '#1877f2', bg: '#eff6ff' };
+        case 'linkedin': return { label: 'LinkedIn', color: '#0a66c2', bg: '#eff6ff' };
+        case 'whatsapp': return { label: 'WhatsApp', color: '#25D366', bg: '#f0fdf4' };
+        default: return { label: PLATFORM, color: '#64748b', bg: '#f1f5f9' };
+      }
+    }
+
+    // ===== FIX 7: Tab list — hide Context and Voice on VinSolutions =====
+    function getTabBarHTML(): string {
+      let tabs = `
+        <button class="tab-btn active" data-tab="generate">✨ Generate</button>
+        <button class="tab-btn" data-tab="coach">⚡ Coach</button>
+        <button class="tab-btn" data-tab="alerts">🔔 Alerts</button>`;
+      // Context and Voice only on non-VinSolutions platforms (Command tier, not ready for primary platform)
+      if (!isVinSolutions) {
+        tabs += `
+        <button class="tab-btn" data-tab="context">📸 Context</button>
+        <button class="tab-btn" data-tab="voice">🎤 Voice</button>`;
+      }
+      tabs += `
+        <button class="tab-btn" data-tab="command">⚡ Command</button>`;
+      return tabs;
+    }
+
     // ===== SIDEBAR =====
     async function openSidebar() {
-      // Onboarding gate: if no profile exists, open onboarding page
+      // Onboarding gate
       try {
         const check = await browser.storage.sync.get(['profile_onboarded']);
         if (!check.profile_onboarded) {
-          // Must open via background script — Chrome blocks extension pages opened from content scripts
           browser.runtime.sendMessage({ type: 'OPEN_ONBOARDING' });
           return;
         }
@@ -253,24 +294,85 @@ export default defineContentScript({
 
       if (sidebarRoot) { sidebarRoot.style.display = 'block'; sidebarOpen = true; return; }
 
-      // Prevent double sidebar — check DOM for existing host from another frame's content script
+      // FIX 2: Prevent double sidebar
       if (document.getElementById('oper8er-host')) { return; }
 
       const host = document.createElement('div');
       host.id = 'oper8er-host';
-      Object.assign(host.style, { position:'fixed',top:'0',right:'0',width:'320px',height:'100vh',zIndex:'2147483647' });
+
+      // FIX 3: Platform-specific position
+      const sidebarWidth = isVinSolutions ? '320px' : '300px';
+      const sidebarSide = isVinSolutions ? 'left' : 'right';
+      Object.assign(host.style, {
+        position:'fixed', top:'0', [sidebarSide]:'0',
+        width: sidebarWidth, height:'100vh', zIndex:'2147483647'
+      });
 
       const shadow = host.attachShadow({ mode: 'open' });
       const style = document.createElement('style');
-      style.textContent = CSS;
+      style.textContent = getCSS(sidebarSide);
       shadow.appendChild(style);
 
       const container = document.createElement('div');
       container.id = 'o8';
-      container.innerHTML = isVinSolutions ? HTML_VINSOLUTIONS : HTML_UNIVERSAL;
+      container.innerHTML = isVinSolutions ? getHTML_VinSolutions() : getHTML_Universal();
       shadow.appendChild(container);
 
-      document.body.appendChild(host);
+      // FIX 5: VinSolutions specific placement — try DOM injection, fall back to fixed
+      if (isVinSolutions) {
+        let injected = false;
+        const tryInjectIntoDOM = () => {
+          // Look for VinSolutions left panel containers
+          const targets = [
+            document.querySelector('#left-panel'),
+            document.querySelector('.left-panel'),
+            document.querySelector('[id*="LeftPanel"]'),
+            document.querySelector('[class*="left-panel"]'),
+            document.querySelector('[id*="leadList"]'),
+            document.querySelector('[class*="lead-list"]'),
+            document.querySelector('#mainContent'),
+            document.querySelector('.workspace')
+          ];
+          for (const target of targets) {
+            if (target && target.offsetWidth > 0) {
+              // Make position relative for sidebar to flow in layout
+              host.style.position = 'relative';
+              host.style.height = '100%';
+              host.style.flexShrink = '0';
+              target.insertBefore(host, target.firstChild);
+              injected = true;
+              return true;
+            }
+          }
+          return false;
+        };
+
+        if (!tryInjectIntoDOM()) {
+          // Watch for the panel to appear (max 5 seconds)
+          const observer = new MutationObserver(() => {
+            if (tryInjectIntoDOM()) observer.disconnect();
+          });
+          observer.observe(document.body, { childList: true, subtree: true });
+          setTimeout(() => {
+            observer.disconnect();
+            if (!injected) {
+              // Fall back to fixed position on the left
+              document.body.appendChild(host);
+            }
+          }, 5000);
+          // Append immediately as fixed while waiting
+          if (!injected) document.body.appendChild(host);
+        }
+      } else {
+        document.body.appendChild(host);
+      }
+
+      // Mark injection complete
+      const marker = document.createElement('div');
+      marker.id = 'floq-sidebar';
+      marker.style.display = 'none';
+      document.body.appendChild(marker);
+
       sidebarRoot = host;
       sidebarOpen = true;
 
@@ -290,7 +392,7 @@ export default defineContentScript({
         });
       }
 
-      // Voice input
+      // Voice input on Generate tab
       let voiceActive = false;
       let recognition: any = null;
       s.getElementById('o8-mic')!.onclick = () => {
@@ -410,162 +512,163 @@ export default defineContentScript({
         });
       });
 
-      // ===== CONTEXT TAB — Screenshot drop + paste =====
-      let contextImage: string | null = null;
-      const dropZone = s.getElementById('o8-ctx-dropzone');
-      const ctxPreview = s.getElementById('o8-ctx-preview');
-      const ctxImg = s.getElementById('o8-ctx-img') as HTMLImageElement;
-      const ctxDirection = s.getElementById('o8-ctx-direction') as HTMLTextAreaElement;
-      const ctxGenBtn = s.getElementById('o8-ctx-generate') as HTMLButtonElement;
-      const ctxOutput = s.getElementById('o8-ctx-output');
+      // ===== CONTEXT TAB — Screenshot drop + paste (only on non-VinSolutions) =====
+      if (!isVinSolutions) {
+        let contextImage: string | null = null;
+        const dropZone = s.getElementById('o8-ctx-dropzone');
+        const ctxPreview = s.getElementById('o8-ctx-preview');
+        const ctxImg = s.getElementById('o8-ctx-img') as HTMLImageElement;
+        const ctxDirection = s.getElementById('o8-ctx-direction') as HTMLTextAreaElement;
+        const ctxGenBtn = s.getElementById('o8-ctx-generate') as HTMLButtonElement;
+        const ctxOutput = s.getElementById('o8-ctx-output');
 
-      function setContextImage(dataUrl: string) {
-        contextImage = dataUrl;
-        if (ctxImg) ctxImg.src = dataUrl;
-        if (ctxPreview) ctxPreview.style.display = 'block';
-        if (dropZone) dropZone.style.display = 'none';
-        updateCtxBtn();
-      }
-      function clearContextImage() {
-        contextImage = null;
-        if (ctxPreview) ctxPreview.style.display = 'none';
-        if (dropZone) dropZone.style.display = 'flex';
-        updateCtxBtn();
-      }
-      function updateCtxBtn() {
-        if (ctxGenBtn) ctxGenBtn.disabled = !contextImage || !ctxDirection?.value.trim();
-      }
-
-      if (dropZone) {
-        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
-        dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('dragover'); });
-        dropZone.addEventListener('drop', (e: any) => {
-          e.preventDefault(); dropZone.classList.remove('dragover');
-          const file = e.dataTransfer?.files?.[0];
-          if (file?.type.startsWith('image/')) {
-            const reader = new FileReader();
-            reader.onload = () => setContextImage(reader.result as string);
-            reader.readAsDataURL(file);
-          }
-        });
-      }
-      // Clipboard paste handler for context tab
-      document.addEventListener('paste', (e: any) => {
-        if (!s.getElementById('tab-context')?.classList.contains('active')) return;
-        const item = e.clipboardData?.items?.[0];
-        if (item?.type.startsWith('image/')) {
-          const blob = item.getAsFile();
-          if (blob) {
-            const reader = new FileReader();
-            reader.onload = () => setContextImage(reader.result as string);
-            reader.readAsDataURL(blob);
-          }
-        }
-      });
-      if (s.getElementById('o8-ctx-remove')) {
-        s.getElementById('o8-ctx-remove')!.addEventListener('click', clearContextImage);
-      }
-      if (ctxDirection) ctxDirection.addEventListener('input', updateCtxBtn);
-
-      if (ctxGenBtn) {
-        ctxGenBtn.addEventListener('click', async () => {
-          if (!contextImage || !ctxDirection?.value.trim()) return;
-          ctxGenBtn.textContent = 'Analyzing...'; ctxGenBtn.disabled = true; ctxGenBtn.style.background = '#94a3b8';
-          if (ctxOutput) ctxOutput.innerHTML = '';
-          try {
-            const resp = await browser.runtime.sendMessage({
-              type: 'CONTEXT_REPLY',
-              payload: { image: contextImage, direction: ctxDirection.value.trim() }
-            });
-            if (resp.error) {
-              addOutput(s, 'Error', resp.error, 'o8-ctx-output');
-            } else {
-              if (resp.platform) addOutput(s, 'PLATFORM', resp.platform, 'o8-ctx-output');
-              if (resp.customer_intent) addOutput(s, 'CUSTOMER INTENT', resp.customer_intent, 'o8-ctx-output');
-              addOutput(s, 'REPLY', resp.reply || resp.raw || '', 'o8-ctx-output');
-            }
-          } catch(e: any) {
-            addOutput(s, 'Error', e.message, 'o8-ctx-output');
-          }
-          ctxGenBtn.textContent = '📸 Generate Reply'; ctxGenBtn.disabled = false; ctxGenBtn.style.background = '#7F77DD';
+        function setContextImage(dataUrl: string) {
+          contextImage = dataUrl;
+          if (ctxImg) ctxImg.src = dataUrl;
+          if (ctxPreview) ctxPreview.style.display = 'block';
+          if (dropZone) dropZone.style.display = 'none';
           updateCtxBtn();
-        });
-      }
+        }
+        function clearContextImage() {
+          contextImage = null;
+          if (ctxPreview) ctxPreview.style.display = 'none';
+          if (dropZone) dropZone.style.display = 'flex';
+          updateCtxBtn();
+        }
+        function updateCtxBtn() {
+          if (ctxGenBtn) ctxGenBtn.disabled = !contextImage || !ctxDirection?.value.trim();
+        }
 
-      // ===== VOICE TAB — Push-to-talk =====
-      let voiceTabRecognition: any = null;
-      let voiceTabActive = false;
-      const voiceMic = s.getElementById('o8-voice-mic');
-      const voiceLabel = s.getElementById('o8-voice-label');
-      const voiceTranscript = s.getElementById('o8-voice-transcript');
-      const voiceGenBtn = s.getElementById('o8-voice-generate') as HTMLButtonElement;
-      const voiceOutput = s.getElementById('o8-voice-output');
-
-      function startVoiceCapture() {
-        const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        if (!SR) { if (voiceLabel) voiceLabel.textContent = 'Voice not supported in this browser'; return; }
-        voiceTabRecognition = new SR();
-        voiceTabRecognition.continuous = false;
-        voiceTabRecognition.interimResults = true;
-        voiceTabRecognition.lang = 'en-US';
-        voiceTabActive = true;
-        if (voiceMic) voiceMic.classList.add('active');
-        if (voiceLabel) voiceLabel.textContent = 'Listening...';
-        if (voiceTranscript) { voiceTranscript.style.display = 'block'; voiceTranscript.textContent = ''; }
-
-        voiceTabRecognition.onresult = (e: any) => {
-          const transcript = Array.from(e.results).map((r: any) => r[0].transcript).join('');
-          if (voiceTranscript) voiceTranscript.textContent = transcript;
-        };
-        voiceTabRecognition.onend = () => {
-          voiceTabActive = false;
-          if (voiceMic) voiceMic.classList.remove('active');
-          if (voiceLabel) voiceLabel.textContent = 'Tap to talk again';
-          if (voiceTranscript?.textContent?.trim()) {
-            if (voiceGenBtn) voiceGenBtn.style.display = 'block';
-          }
-        };
-        voiceTabRecognition.onerror = () => {
-          voiceTabActive = false;
-          if (voiceMic) voiceMic.classList.remove('active');
-          if (voiceLabel) voiceLabel.textContent = 'Hold to talk';
-        };
-        voiceTabRecognition.start();
-      }
-
-      if (voiceMic) {
-        voiceMic.addEventListener('mousedown', startVoiceCapture);
-        voiceMic.addEventListener('mouseup', () => { if (voiceTabRecognition && voiceTabActive) voiceTabRecognition.stop(); });
-        voiceMic.addEventListener('touchstart', (e) => { e.preventDefault(); startVoiceCapture(); });
-        voiceMic.addEventListener('touchend', () => { if (voiceTabRecognition && voiceTabActive) voiceTabRecognition.stop(); });
-      }
-
-      if (voiceGenBtn) {
-        voiceGenBtn.addEventListener('click', async () => {
-          const transcript = voiceTranscript?.textContent?.trim();
-          if (!transcript) return;
-          voiceGenBtn.textContent = 'Generating...'; voiceGenBtn.disabled = true; voiceGenBtn.style.background = '#94a3b8';
-          if (voiceOutput) voiceOutput.innerHTML = '';
-          try {
-            const resp = await browser.runtime.sendMessage({
-              type: 'VOICE_REPLY',
-              payload: { transcription: transcript }
-            });
-            if (resp.error) {
-              addOutput(s, 'Error', resp.error, 'o8-voice-output');
-            } else {
-              const sec = resp.sections;
-              if (sec?.text) addOutput(s, 'TEXT', sec.text, 'o8-voice-output');
-              if (sec?.email) addOutput(s, 'EMAIL', sec.email, 'o8-voice-output');
-              if (sec?.crm) addOutput(s, 'CRM NOTE', sec.crm, 'o8-voice-output');
-              if (!sec?.text && !sec?.email && !sec?.crm) addOutput(s, 'OUTPUT', resp.text || '', 'o8-voice-output');
+        if (dropZone) {
+          dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+          dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('dragover'); });
+          dropZone.addEventListener('drop', (e: any) => {
+            e.preventDefault(); dropZone.classList.remove('dragover');
+            const file = e.dataTransfer?.files?.[0];
+            if (file?.type.startsWith('image/')) {
+              const reader = new FileReader();
+              reader.onload = () => setContextImage(reader.result as string);
+              reader.readAsDataURL(file);
             }
-          } catch(e: any) {
-            addOutput(s, 'Error', e.message, 'o8-voice-output');
+          });
+        }
+        document.addEventListener('paste', (e: any) => {
+          if (!s.getElementById('tab-context')?.classList.contains('active')) return;
+          const item = e.clipboardData?.items?.[0];
+          if (item?.type.startsWith('image/')) {
+            const blob = item.getAsFile();
+            if (blob) {
+              const reader = new FileReader();
+              reader.onload = () => setContextImage(reader.result as string);
+              reader.readAsDataURL(blob);
+            }
           }
-          voiceGenBtn.textContent = '✨ Generate Reply'; voiceGenBtn.disabled = false; voiceGenBtn.style.background = '#7F77DD';
         });
-      }
+        if (s.getElementById('o8-ctx-remove')) {
+          s.getElementById('o8-ctx-remove')!.addEventListener('click', clearContextImage);
+        }
+        if (ctxDirection) ctxDirection.addEventListener('input', updateCtxBtn);
+
+        if (ctxGenBtn) {
+          ctxGenBtn.addEventListener('click', async () => {
+            if (!contextImage || !ctxDirection?.value.trim()) return;
+            ctxGenBtn.textContent = 'Analyzing...'; ctxGenBtn.disabled = true; ctxGenBtn.style.background = '#94a3b8';
+            if (ctxOutput) ctxOutput.innerHTML = '';
+            try {
+              const resp = await browser.runtime.sendMessage({
+                type: 'CONTEXT_REPLY',
+                payload: { image: contextImage, direction: ctxDirection.value.trim() }
+              });
+              if (resp.error) {
+                addOutput(s, 'Error', resp.error, 'o8-ctx-output');
+              } else {
+                if (resp.platform) addOutput(s, 'PLATFORM', resp.platform, 'o8-ctx-output');
+                if (resp.customer_intent) addOutput(s, 'CUSTOMER INTENT', resp.customer_intent, 'o8-ctx-output');
+                addOutput(s, 'REPLY', resp.reply || resp.raw || '', 'o8-ctx-output');
+              }
+            } catch(e: any) {
+              addOutput(s, 'Error', e.message, 'o8-ctx-output');
+            }
+            ctxGenBtn.textContent = '📸 Generate Reply'; ctxGenBtn.disabled = false; ctxGenBtn.style.background = '#7F77DD';
+            updateCtxBtn();
+          });
+        }
+
+        // ===== VOICE TAB — Push-to-talk (only on non-VinSolutions) =====
+        let voiceTabRecognition: any = null;
+        let voiceTabActive = false;
+        const voiceMic = s.getElementById('o8-voice-mic');
+        const voiceLabel = s.getElementById('o8-voice-label');
+        const voiceTranscript = s.getElementById('o8-voice-transcript');
+        const voiceGenBtn = s.getElementById('o8-voice-generate') as HTMLButtonElement;
+        const voiceOutput = s.getElementById('o8-voice-output');
+
+        function startVoiceCapture() {
+          const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+          if (!SR) { if (voiceLabel) voiceLabel.textContent = 'Voice not supported in this browser'; return; }
+          voiceTabRecognition = new SR();
+          voiceTabRecognition.continuous = false;
+          voiceTabRecognition.interimResults = true;
+          voiceTabRecognition.lang = 'en-US';
+          voiceTabActive = true;
+          if (voiceMic) voiceMic.classList.add('active');
+          if (voiceLabel) voiceLabel.textContent = 'Listening...';
+          if (voiceTranscript) { voiceTranscript.style.display = 'block'; voiceTranscript.textContent = ''; }
+
+          voiceTabRecognition.onresult = (e: any) => {
+            const transcript = Array.from(e.results).map((r: any) => r[0].transcript).join('');
+            if (voiceTranscript) voiceTranscript.textContent = transcript;
+          };
+          voiceTabRecognition.onend = () => {
+            voiceTabActive = false;
+            if (voiceMic) voiceMic.classList.remove('active');
+            if (voiceLabel) voiceLabel.textContent = 'Tap to talk again';
+            if (voiceTranscript?.textContent?.trim()) {
+              if (voiceGenBtn) voiceGenBtn.style.display = 'block';
+            }
+          };
+          voiceTabRecognition.onerror = () => {
+            voiceTabActive = false;
+            if (voiceMic) voiceMic.classList.remove('active');
+            if (voiceLabel) voiceLabel.textContent = 'Hold to talk';
+          };
+          voiceTabRecognition.start();
+        }
+
+        if (voiceMic) {
+          voiceMic.addEventListener('mousedown', startVoiceCapture);
+          voiceMic.addEventListener('mouseup', () => { if (voiceTabRecognition && voiceTabActive) voiceTabRecognition.stop(); });
+          voiceMic.addEventListener('touchstart', (e) => { e.preventDefault(); startVoiceCapture(); });
+          voiceMic.addEventListener('touchend', () => { if (voiceTabRecognition && voiceTabActive) voiceTabRecognition.stop(); });
+        }
+
+        if (voiceGenBtn) {
+          voiceGenBtn.addEventListener('click', async () => {
+            const transcript = voiceTranscript?.textContent?.trim();
+            if (!transcript) return;
+            voiceGenBtn.textContent = 'Generating...'; voiceGenBtn.disabled = true; voiceGenBtn.style.background = '#94a3b8';
+            if (voiceOutput) voiceOutput.innerHTML = '';
+            try {
+              const resp = await browser.runtime.sendMessage({
+                type: 'VOICE_REPLY',
+                payload: { transcription: transcript }
+              });
+              if (resp.error) {
+                addOutput(s, 'Error', resp.error, 'o8-voice-output');
+              } else {
+                const sec = resp.sections;
+                if (sec?.text) addOutput(s, 'TEXT', sec.text, 'o8-voice-output');
+                if (sec?.email) addOutput(s, 'EMAIL', sec.email, 'o8-voice-output');
+                if (sec?.crm) addOutput(s, 'CRM NOTE', sec.crm, 'o8-voice-output');
+                if (!sec?.text && !sec?.email && !sec?.crm) addOutput(s, 'OUTPUT', resp.text || '', 'o8-voice-output');
+              }
+            } catch(e: any) {
+              addOutput(s, 'Error', e.message, 'o8-voice-output');
+            }
+            voiceGenBtn.textContent = '✨ Generate Reply'; voiceGenBtn.disabled = false; voiceGenBtn.style.background = '#7F77DD';
+          });
+        }
+      } // end if (!isVinSolutions) — context/voice tab setup
 
       // ===== COACH CHIPS =====
       s.querySelectorAll('.coach-chip').forEach(chip => {
@@ -616,7 +719,6 @@ export default defineContentScript({
       // ===== COMMAND MODE SETUP =====
       let cmdUsedVoice = false;
 
-      // Quick command chips
       s.querySelectorAll('.cmd-chip').forEach(chip => {
         chip.addEventListener('click', () => {
           const ta = s.getElementById('o8-cmd-input') as HTMLTextAreaElement;
@@ -625,7 +727,6 @@ export default defineContentScript({
         });
       });
 
-      // Voice recording (hold to speak)
       const cmdMic = s.getElementById('o8-cmd-mic');
       let cmdRecognition: any = null;
       if (cmdMic) {
@@ -699,19 +800,16 @@ export default defineContentScript({
               const recipientLabel = p.recipient ? ` for ${p.recipient}` : '';
               let confirmText = '';
 
-              // Handle injection based on action
               if (p.action === 'set_reminder' && p.metadata?.reminder_time) {
                 await browser.runtime.sendMessage({ type: 'SET_ALERT', payload: { task: input, alertTime: new Date(p.metadata.reminder_time).getTime() } });
                 const timeStr = new Date(p.metadata.reminder_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
                 confirmText = `Reminder set for ${timeStr}`;
               } else if (p.content) {
-                // Try platform injection
                 const injected = injectContent(p);
                 confirmText = injected
                   ? `${actionLabel}${recipientLabel} — injected`
                   : `${actionLabel}${recipientLabel} — copy below`;
                 if (!injected) {
-                  // Show content for manual copy
                   statusArea.innerHTML += `<div class="out-card"><div class="out-label">GENERATED — COPY AND SEND</div><div class="out-text">${esc(p.content).replace(/\n/g, '<br>')}</div><div class="out-actions"><button class="out-copy">Copy</button></div></div>`;
                   statusArea.querySelector('.out-copy')?.addEventListener('click', function(this: HTMLElement) {
                     navigator.clipboard.writeText(p.content);
@@ -723,14 +821,12 @@ export default defineContentScript({
                 confirmText = `Command processed${recipientLabel}`;
               }
 
-              // Show success card
               const successDiv = document.createElement('div');
               successDiv.className = 'cmd-result success';
               successDiv.innerHTML = `<div class="cmd-result-label">✓ SUCCESS</div><div class="cmd-result-text">${esc(confirmText)}</div>`;
               statusArea.prepend(successDiv);
               setTimeout(() => successDiv.remove(), 4000);
 
-              // Voice confirmation (only if rep used voice)
               if (cmdUsedVoice && confirmText && window.speechSynthesis) {
                 const u = new SpeechSynthesisUtterance(confirmText);
                 u.rate = 1.1; u.pitch = 1.0;
@@ -781,7 +877,6 @@ export default defineContentScript({
 
     // ===== GENERATE =====
     async function doGenerate(s: ShadowRoot) {
-      // Debounce: prevent double-click generating twice
       if (isGenerating) return;
       isGenerating = true;
 
@@ -814,8 +909,7 @@ export default defineContentScript({
             repInput: input,
             repName: '',
             dealership: '',
-            platform: platform,
-            // Structured metadata for generation_events logging
+            platform: PLATFORM,
             metadata: {
               workflow_type: type === 'all' ? 'all' : type,
               customer_name: leadData?.customerName || null,
@@ -962,8 +1056,7 @@ export default defineContentScript({
     function injectContent(parsed: any): boolean {
       const { action, content, subject } = parsed;
 
-      // Gmail injection
-      if ((action === 'write_email' || platform === 'gmail') && isGmail) {
+      if ((action === 'write_email' || PLATFORM === 'gmail') && isGmail) {
         const body = document.querySelector('div[aria-label="Message Body"][contenteditable="true"]') as HTMLElement;
         if (body) {
           body.focus();
@@ -976,26 +1069,23 @@ export default defineContentScript({
         }
       }
 
-      // Facebook injection
-      if ((action === 'write_facebook_message' || platform === 'facebook') && isFacebook) {
+      if ((action === 'write_facebook_message' || PLATFORM === 'facebook') && isFacebook) {
         const box = document.querySelector('div[role="textbox"][contenteditable="true"]') as HTMLElement;
         if (box) { box.focus(); document.execCommand('insertText', false, content); return true; }
       }
 
-      // LinkedIn injection
-      if ((action === 'write_linkedin_message' || platform === 'linkedin') && isLinkedIn) {
+      if ((action === 'write_linkedin_message' || PLATFORM === 'linkedin') && isLinkedIn) {
         const box = document.querySelector('div[role="textbox"][contenteditable="true"]') as HTMLElement;
         if (box) { box.focus(); document.execCommand('insertText', false, content); return true; }
       }
 
-      // VinSolutions CRM injection
       if ((action === 'log_crm_note') && isVinSolutions) {
         const statusEl = document.createElement('span');
         pasteIntoCRM(content, statusEl);
         return true;
       }
 
-      return false; // fallback to manual copy
+      return false;
     }
 
     // ===== OPEN COMMAND TAB LISTENER (for Alt+K shortcut) =====
@@ -1035,14 +1125,14 @@ export default defineContentScript({
         const ampm = (byTime[3] || '').toLowerCase();
         if (ampm === 'pm' && h < 12) h += 12;
         if (ampm === 'am' && h === 12) h = 0;
-        if (!ampm && h < 7) h += 12; // assume PM for low numbers
+        if (!ampm && h < 7) h += 12;
         const d = new Date(); d.setHours(h, m, 0, 0);
         if (d.getTime() < now) d.setDate(d.getDate() + 1);
         return d.getTime();
       }
       const noonMatch = text.match(/\bnoon\b/i);
       if (noonMatch) { const d = new Date(); d.setHours(12, 0, 0, 0); if (d.getTime() < now) d.setDate(d.getDate() + 1); return d.getTime(); }
-      return now + 30 * 60000; // default 30 min
+      return now + 30 * 60000;
     }
 
     async function loadAlerts(s: ShadowRoot) {
@@ -1086,7 +1176,6 @@ export default defineContentScript({
           browser.runtime.sendMessage({ type: 'DISMISS_ALERT', payload: { id: msg.payload.id } });
         });
         document.body.appendChild(banner);
-        // Audio chime
         try {
           const ac = new AudioContext();
           const g = ac.createGain(); g.gain.value = 0.3; g.connect(ac.destination);
@@ -1098,20 +1187,76 @@ export default defineContentScript({
 
     function esc(s: string) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+    // ===== HTML TEMPLATES =====
+
+    // Shared tab HTML fragments
+    const HTML_CONTEXT_TAB = `
+      <div id="tab-context" class="tab-content">
+        <div class="input-section">
+          <div id="o8-ctx-dropzone" class="ctx-dropzone">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7F77DD" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+            <span>Drop a screenshot or paste (Ctrl+V)</span>
+          </div>
+          <div id="o8-ctx-preview" class="ctx-preview" style="display:none">
+            <img id="o8-ctx-img" class="ctx-img" />
+            <button id="o8-ctx-remove" class="ctx-remove">&times;</button>
+          </div>
+          <textarea id="o8-ctx-direction" class="input" placeholder="What do you want to say? e.g. tell her yes it's available, ask when she can come in" rows="2"></textarea>
+          <button id="o8-ctx-generate" class="gen-btn" disabled>📸 Generate Reply</button>
+        </div>
+        <div id="o8-ctx-output" class="outputs"></div>
+      </div>
+    `;
+
+    const HTML_VOICE_TAB = `
+      <div id="tab-voice" class="tab-content">
+        <div class="voice-section">
+          <button id="o8-voice-mic" class="voice-mic">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          </button>
+          <div id="o8-voice-label" class="voice-label">Hold to talk</div>
+          <div id="o8-voice-transcript" class="voice-transcript" contenteditable="true" style="display:none"></div>
+          <button id="o8-voice-generate" class="gen-btn" style="display:none">✨ Generate Reply</button>
+        </div>
+        <div id="o8-voice-output" class="outputs"></div>
+      </div>
+    `;
+
+    const HTML_COMMAND_TAB = `
+      <div id="tab-command" class="tab-content">
+        <div class="cmd-section">
+          <div class="cmd-mic-wrap">
+            <button id="o8-cmd-mic" class="cmd-mic" title="Hold to speak">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            </button>
+            <div id="o8-cmd-mic-label" class="cmd-mic-label">Hold to speak your command</div>
+          </div>
+          <div id="o8-cmd-transcript" class="cmd-transcript" style="display:none"></div>
+          <textarea id="o8-cmd-input" class="input cmd-input" placeholder="Or type a command...&#10;Example: Write an email to Yancy that Wyatt has not made his calls today" rows="3"></textarea>
+          <div class="cmd-chips">
+            <button class="cmd-chip" data-prefix="Write email ">Write email</button>
+            <button class="cmd-chip" data-prefix="Write text ">Write text</button>
+            <button class="cmd-chip" data-prefix="Facebook message ">Facebook message</button>
+            <button class="cmd-chip" data-prefix="Log CRM note ">Log CRM note</button>
+            <button class="cmd-chip" data-prefix="Set reminder ">Set reminder</button>
+          </div>
+          <button id="o8-cmd-execute" class="gen-btn cmd-execute">⚡ Execute Command</button>
+          <div class="cmd-hint">Floq will generate and inject the output</div>
+        </div>
+        <div id="o8-cmd-status" class="cmd-status-area"></div>
+      </div>
+    `;
+
     // ===== HTML: VINSOLUTIONS (auto-scan + customer card) =====
-    const HTML_VINSOLUTIONS = `
+    function getHTML_VinSolutions(): string {
+      const badge = getPlatformBadge();
+      return `
       <div class="header">
         <span class="logo">FLOQ</span>
+        <span class="platform-badge" style="color:${badge.color};background:${badge.bg}">${esc(badge.label)}</span>
         <span id="o8-close" class="close">&times;</span>
       </div>
-      <div class="tab-bar">
-        <button class="tab-btn active" data-tab="generate">✨ Generate</button>
-        <button class="tab-btn" data-tab="coach">⚡ Coach</button>
-        <button class="tab-btn" data-tab="alerts">🔔 Alerts</button>
-        <button class="tab-btn" data-tab="context">📸 Context</button>
-        <button class="tab-btn" data-tab="voice">🎤 Voice</button>
-        <button class="tab-btn" data-tab="command">⚡ Command</button>
-      </div>
+      <div class="tab-bar">${getTabBarHTML()}</div>
       <div id="tab-generate" class="tab-content active">
         <div id="o8-empty" class="empty">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
@@ -1161,92 +1306,26 @@ export default defineContentScript({
         </div>
         <div id="o8-alert-list" class="outputs" style="padding:10px 14px"></div>
       </div>
-      ${HTML_CONTEXT_TAB}
-      ${HTML_VOICE_TAB}
       ${HTML_COMMAND_TAB}
       <div class="sidebar-footer"><a id="o8-settings" class="settings-link" title="Profile Settings">&#9881; Settings</a><div class="tcpa-notice">Messages are for human review. You are responsible for TCPA compliance.</div></div>
     `;
-
-    // ===== SHARED CONTEXT TAB HTML =====
-    const HTML_CONTEXT_TAB = `
-      <div id="tab-context" class="tab-content">
-        <div class="input-section">
-          <div id="o8-ctx-dropzone" class="ctx-dropzone">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7F77DD" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-            <span>Drop a screenshot or paste (Ctrl+V)</span>
-          </div>
-          <div id="o8-ctx-preview" class="ctx-preview" style="display:none">
-            <img id="o8-ctx-img" class="ctx-img" />
-            <button id="o8-ctx-remove" class="ctx-remove">&times;</button>
-          </div>
-          <textarea id="o8-ctx-direction" class="input" placeholder="What do you want to say? e.g. tell her yes it's available, ask when she can come in" rows="2"></textarea>
-          <button id="o8-ctx-generate" class="gen-btn" disabled>📸 Generate Reply</button>
-        </div>
-        <div id="o8-ctx-output" class="outputs"></div>
-      </div>
-    `;
-
-    // ===== SHARED VOICE TAB HTML =====
-    const HTML_VOICE_TAB = `
-      <div id="tab-voice" class="tab-content">
-        <div class="voice-section">
-          <button id="o8-voice-mic" class="voice-mic">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-          </button>
-          <div id="o8-voice-label" class="voice-label">Hold to talk</div>
-          <div id="o8-voice-transcript" class="voice-transcript" contenteditable="true" style="display:none"></div>
-          <button id="o8-voice-generate" class="gen-btn" style="display:none">✨ Generate Reply</button>
-        </div>
-        <div id="o8-voice-output" class="outputs"></div>
-      </div>
-    `;
-
-    // ===== SHARED COMMAND TAB HTML =====
-    const HTML_COMMAND_TAB = `
-      <div id="tab-command" class="tab-content">
-        <div class="cmd-section">
-          <div class="cmd-mic-wrap">
-            <button id="o8-cmd-mic" class="cmd-mic" title="Hold to speak">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-            </button>
-            <div id="o8-cmd-mic-label" class="cmd-mic-label">Hold to speak your command</div>
-          </div>
-          <div id="o8-cmd-transcript" class="cmd-transcript" style="display:none"></div>
-          <textarea id="o8-cmd-input" class="input cmd-input" placeholder="Or type a command...&#10;Example: Write an email to Yancy that Wyatt has not made his calls today" rows="3"></textarea>
-          <div class="cmd-chips">
-            <button class="cmd-chip" data-prefix="Write email ">Write email</button>
-            <button class="cmd-chip" data-prefix="Write text ">Write text</button>
-            <button class="cmd-chip" data-prefix="Facebook message ">Facebook message</button>
-            <button class="cmd-chip" data-prefix="Log CRM note ">Log CRM note</button>
-            <button class="cmd-chip" data-prefix="Set reminder ">Set reminder</button>
-          </div>
-          <button id="o8-cmd-execute" class="gen-btn cmd-execute">⚡ Execute Command</button>
-          <div class="cmd-hint">Floq will generate and inject the output</div>
-        </div>
-        <div id="o8-cmd-status" class="cmd-status-area"></div>
-      </div>
-    `;
+    }
 
     // ===== HTML: UNIVERSAL (manual input, no customer card) =====
-    const platformHint = isGmail || isOutlook ? 'Describe the email situation...'
-      : isFacebook ? 'Describe the conversation...'
-      : isLinkedIn ? 'Describe the LinkedIn interaction...'
-      : "What's happening right now?";
+    function getHTML_Universal(): string {
+      const badge = getPlatformBadge();
+      const platformHint = isGmail ? 'Describe the email situation...'
+        : isFacebook ? 'Describe the conversation...'
+        : isLinkedIn ? 'Describe the LinkedIn interaction...'
+        : "What's happening right now?";
 
-    const HTML_UNIVERSAL = `
+      return `
       <div class="header">
         <span class="logo">FLOQ</span>
-        <span class="platform-badge">${esc(platform)}</span>
+        <span class="platform-badge" style="color:${badge.color};background:${badge.bg}">${esc(badge.label)}</span>
         <span id="o8-close" class="close">&times;</span>
       </div>
-      <div class="tab-bar">
-        <button class="tab-btn active" data-tab="generate">✨ Generate</button>
-        <button class="tab-btn" data-tab="coach">⚡ Coach</button>
-        <button class="tab-btn" data-tab="alerts">🔔 Alerts</button>
-        <button class="tab-btn" data-tab="context">📸 Context</button>
-        <button class="tab-btn" data-tab="voice">🎤 Voice</button>
-        <button class="tab-btn" data-tab="command">⚡ Command</button>
-      </div>
+      <div class="tab-bar">${getTabBarHTML()}</div>
       <div id="tab-generate" class="tab-content active">
         <div class="input-section" style="padding-top:8px">
           <div class="chips">
@@ -1290,16 +1369,20 @@ export default defineContentScript({
       ${HTML_COMMAND_TAB}
       <div class="sidebar-footer"><a id="o8-settings" class="settings-link" title="Profile Settings">&#9881; Settings</a><div class="tcpa-notice">Messages are for human review. You are responsible for TCPA compliance.</div></div>
     `;
+    }
 
     // ===== CSS =====
-    const CSS = `
+    function getCSS(sidebarSide: string): string {
+      const borderSide = sidebarSide === 'left' ? 'border-right' : 'border-left';
+      const shadowDir = sidebarSide === 'left' ? '4px' : '-4px';
+      return `
       * { margin:0; padding:0; box-sizing:border-box; }
       :host { all:initial; font-family:system-ui,-apple-system,sans-serif; font-size:13px; color:#1a202c; }
-      #o8 { width:320px; height:100vh; background:#fff; border-left:1px solid #e2e8f0; overflow-y:auto; overscroll-behavior:contain; box-shadow:-4px 0 16px rgba(0,0,0,0.06); display:flex; flex-direction:column; }
+      #o8 { width:320px; height:100vh; background:#fff; ${borderSide}:1px solid #e2e8f0; overflow-y:auto; overscroll-behavior:contain; box-shadow:${shadowDir} 0 16px rgba(0,0,0,0.06); display:flex; flex-direction:column; }
 
       .header { padding:12px 14px; border-bottom:1px solid #e8eaed; display:flex; justify-content:space-between; align-items:center; flex-shrink:0; gap:8px; }
       .logo { font-size:14px; font-weight:700; color:#7F77DD; letter-spacing:3px; }
-      .platform-badge { font-size:9px; font-weight:600; color:#64748b; background:#f1f5f9; padding:2px 8px; border-radius:10px; text-transform:uppercase; letter-spacing:1px; flex:1; text-align:center; }
+      .platform-badge { font-size:9px; font-weight:600; padding:2px 8px; border-radius:10px; text-transform:uppercase; letter-spacing:1px; flex:1; text-align:center; }
       .close { font-size:20px; color:#94a3b8; cursor:pointer; padding:0 4px; }
       .close:hover { color:#475569; }
 
@@ -1344,8 +1427,8 @@ export default defineContentScript({
       .out-paste:disabled { background:#94a3b8; border-color:#94a3b8; cursor:wait; }
       .out-paste-status { font-size:10px; margin-top:4px; min-height:14px; }
 
-      .tab-bar { display:flex; border-bottom:1px solid #e8eaed; flex-shrink:0; }
-      .tab-btn { flex:1; padding:8px 4px; font-size:11px; font-weight:600; font-family:inherit; border:none; background:transparent; color:#94a3b8; cursor:pointer; border-bottom:2px solid transparent; transition:all .15s; }
+      .tab-bar { display:flex; border-bottom:1px solid #e8eaed; flex-shrink:0; overflow-x:auto; }
+      .tab-btn { flex:1; padding:8px 4px; font-size:11px; font-weight:600; font-family:inherit; border:none; background:transparent; color:#94a3b8; cursor:pointer; border-bottom:2px solid transparent; transition:all .15s; white-space:nowrap; min-width:0; }
       .tab-btn.active { color:#2563eb; border-bottom-color:#2563eb; }
       .tab-btn:hover { color:#475569; }
       .tab-content { display:none; flex-direction:column; flex:1; overflow:hidden; }
@@ -1409,6 +1492,7 @@ export default defineContentScript({
       .cmd-result-actions { display:flex; gap:6px; margin-top:8px; }
       .cmd-retry { padding:5px 14px; background:#FF3B30; border:none; border-radius:4px; font-size:11px; font-weight:600; color:#fff; cursor:pointer; font-family:inherit; }
     `;
+    }
 
     // ===== NETWORK INTERCEPTION (VinSolutions only) =====
     if (isVinSolutions && isUIFrame) {

@@ -5,8 +5,8 @@ export default defineConfig({
   manifest: {
     name: 'Floq — AI Sales Assistant for VinSolutions',
     short_name: 'Floq',
-    version: '1.5.0',
-    version_name: '1.5.0',
+    version: '1.5.1',
+    version_name: '1.5.1',
     description: 'AI writes the text, email, and CRM note inside VinSolutions. Every rep performs like your best one.',
     homepage_url: 'https://floqsales.com',
     icons: {
@@ -24,11 +24,19 @@ export default defineConfig({
     permissions: ['activeTab', 'storage'],
     web_accessible_resources: [{
       resources: ['voice.html', 'oper8er-intercept.js'],
-      matches: ['*://*.vinsolutions.com/*', '*://*.coxautoinc.com/*', '*://mail.google.com/*', '*://www.facebook.com/*', '*://www.linkedin.com/*', '*://web.whatsapp.com/*']
+      matches: [
+        '*://*.vinsolutions.com/*',
+        '*://vinsolutions.app.coxautoinc.com/*',
+        '*://mail.google.com/*',
+        '*://*.facebook.com/*',
+        '*://www.messenger.com/*',
+        '*://www.linkedin.com/*',
+        '*://web.whatsapp.com/*'
+      ]
     }],
     host_permissions: [
       '*://*.vinsolutions.com/*',
-      '*://*.coxautoinc.com/*',
+      '*://vinsolutions.app.coxautoinc.com/*',
       'https://oper8er-proxy-production.up.railway.app/*',
       'https://mqnmemnogbotgmsmqfie.supabase.co/*'
     ],
