@@ -252,6 +252,98 @@ export default defineContentScript({
     pill.onclick = () => { sidebarOpen ? closeSidebar() : openSidebar(); };
     document.body.appendChild(pill);
 
+    // ===== PENDING NOTES BADGE (VinSolutions only) =====
+    let pendingNotes: any[] = [];
+    let pendingBadge: HTMLElement | null = null;
+    let pendingPanel: HTMLElement | null = null;
+
+    function refreshPendingBadge() {
+      if (!isVinSolutions) return;
+      browser.runtime.sendMessage({ type: 'GET_PENDING_NOTES' }).then((resp: any) => {
+        pendingNotes = resp?.notes || [];
+        if (pendingNotes.length > 0) {
+          if (!pendingBadge) {
+            pendingBadge = document.createElement('div');
+            pendingBadge.id = 'floq-pending-badge';
+            Object.assign(pendingBadge.style, { position:'fixed', bottom:'16px', right:'16px', zIndex:'2147483645', background:'#7F77DD', color:'#fff', padding:'8px 14px', borderRadius:'20px', fontSize:'12px', fontWeight:'600', fontFamily:'system-ui,sans-serif', cursor:'pointer', boxShadow:'0 2px 12px rgba(127,119,221,0.4)', transition:'transform .15s' });
+            pendingBadge.onmouseenter = () => { if (pendingBadge) pendingBadge.style.transform = 'scale(1.05)'; };
+            pendingBadge.onmouseleave = () => { if (pendingBadge) pendingBadge.style.transform = 'scale(1)'; };
+            pendingBadge.onclick = () => togglePendingPanel();
+            document.body.appendChild(pendingBadge);
+          }
+          pendingBadge.textContent = `📋 ${pendingNotes.length} note${pendingNotes.length > 1 ? 's' : ''} to log`;
+          pendingBadge.style.display = 'block';
+        } else if (pendingBadge) {
+          pendingBadge.style.display = 'none';
+        }
+      }).catch(() => {});
+    }
+
+    function togglePendingPanel() {
+      if (pendingPanel) { pendingPanel.remove(); pendingPanel = null; return; }
+      pendingPanel = document.createElement('div');
+      Object.assign(pendingPanel.style, { position:'fixed', bottom:'56px', right:'16px', width:'320px', maxHeight:'400px', zIndex:'2147483645', background:'#fff', borderRadius:'12px', border:'1px solid #e2e8f0', boxShadow:'0 8px 32px rgba(0,0,0,0.15)', fontFamily:'system-ui,sans-serif', overflow:'hidden', display:'flex', flexDirection:'column' });
+
+      let html = '<div style="padding:12px 16px;border-bottom:1px solid #e8eaed;font-size:13px;font-weight:700;color:#1a202c;display:flex;justify-content:space-between;align-items:center"><span>Pending Notes</span><span id="floq-pn-close" style="cursor:pointer;color:#94a3b8;font-size:18px">&times;</span></div>';
+      html += '<div style="overflow-y:auto;flex:1;padding:8px">';
+
+      if (pendingNotes.length === 0) {
+        html += '<div style="text-align:center;color:#94a3b8;font-size:12px;padding:20px">No pending notes</div>';
+      } else {
+        for (const note of pendingNotes) {
+          const preview = (note.note_text || '').slice(0, 80) + ((note.note_text || '').length > 80 ? '...' : '');
+          const time = new Date(note.created_at).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+          html += `<div class="floq-pn-card" data-id="${note.id}" data-text="${esc(note.note_text)}" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-bottom:6px">`;
+          html += `<div style="font-size:12px;font-weight:600;color:#1a202c">${esc(note.customer_name || 'Unknown customer')}</div>`;
+          html += `<div style="font-size:11px;color:#64748b;margin-top:2px;line-height:1.4">${esc(preview)}</div>`;
+          html += `<div style="font-size:10px;color:#94a3b8;margin-top:4px">${time}</div>`;
+          html += `<div style="display:flex;gap:6px;margin-top:6px">`;
+          html += `<button class="floq-pn-log" data-id="${note.id}" style="padding:4px 12px;background:#16a34a;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit">Log It</button>`;
+          html += `<button class="floq-pn-dismiss" data-id="${note.id}" style="padding:4px 12px;background:transparent;color:#94a3b8;border:1px solid #e2e8f0;border-radius:4px;font-size:11px;cursor:pointer;font-family:inherit">Dismiss</button>`;
+          html += `</div></div>`;
+        }
+      }
+      html += '</div>';
+      pendingPanel.innerHTML = html;
+      document.body.appendChild(pendingPanel);
+
+      // Close button
+      pendingPanel.querySelector('#floq-pn-close')?.addEventListener('click', () => { if (pendingPanel) { pendingPanel.remove(); pendingPanel = null; } });
+
+      // Log It buttons
+      pendingPanel.querySelectorAll('.floq-pn-log').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = (btn as HTMLElement).dataset.id;
+          const card = (btn as HTMLElement).closest('.floq-pn-card') as HTMLElement;
+          const noteText = card?.dataset.text || '';
+          (btn as HTMLElement).textContent = 'Pasting...';
+          const statusEl = document.createElement('span');
+          await pasteIntoCRM(noteText, statusEl);
+          // Mark as logged regardless — rep can see if it actually pasted
+          try { await browser.runtime.sendMessage({ type: 'MARK_NOTE_LOGGED', payload: { id, status: 'logged' } }); } catch(e) {}
+          card?.remove();
+          refreshPendingBadge();
+        });
+      });
+
+      // Dismiss buttons
+      pendingPanel.querySelectorAll('.floq-pn-dismiss').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = (btn as HTMLElement).dataset.id;
+          const card = (btn as HTMLElement).closest('.floq-pn-card') as HTMLElement;
+          try { await browser.runtime.sendMessage({ type: 'MARK_NOTE_LOGGED', payload: { id, status: 'dismissed' } }); } catch(e) {}
+          card?.remove();
+          refreshPendingBadge();
+        });
+      });
+    }
+
+    // Poll pending notes every 30 seconds on VinSolutions
+    if (isVinSolutions) {
+      setTimeout(refreshPendingBadge, 5000); // first check after 5s
+      setInterval(refreshPendingBadge, 30000);
+    }
+
     // ===== INLINE MIC =====
     function attachInlineMic(shadow: ShadowRoot, inputEl: HTMLTextAreaElement | HTMLInputElement, micBtn: HTMLElement) {
       const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -494,6 +586,24 @@ export default defineContentScript({
         if (leadData.email) meta += (meta ? ' · ' : '') + leadData.email;
         if (leadData.source) meta += (meta ? ' · ' : '') + leadData.source;
         s.getElementById('o8-meta')!.textContent = meta;
+
+        // Auto-match pending notes for this customer
+        const matchDiv = s.getElementById('o8-pending-match');
+        if (matchDiv) matchDiv.remove();
+        const matched = pendingNotes.find(n => n.customer_name && leadData.customerName && n.customer_name.toLowerCase() === leadData.customerName.toLowerCase());
+        if (matched) {
+          const div = document.createElement('div');
+          div.id = 'o8-pending-match';
+          div.innerHTML = `<div style="background:#FFF7ED;border:1px solid #FBBF24;border-radius:8px;padding:10px;margin-top:8px;font-size:11px"><strong style="color:#92400E">Pending note for ${esc(matched.customer_name)}</strong><div style="color:#64748b;margin:4px 0;line-height:1.4">${esc((matched.note_text || '').slice(0, 100))}</div><button id="o8-pn-log-match" style="padding:4px 12px;background:#16a34a;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer">Log It</button></div>`;
+          card.appendChild(div);
+          div.querySelector('#o8-pn-log-match')?.addEventListener('click', async () => {
+            const statusEl = document.createElement('span');
+            await pasteIntoCRM(matched.note_text, statusEl);
+            try { await browser.runtime.sendMessage({ type: 'MARK_NOTE_LOGGED', payload: { id: matched.id, status: 'logged' } }); } catch(e) {}
+            div.remove();
+            refreshPendingBadge();
+          });
+        }
       } else card.style.display = 'none';
     }
 
@@ -540,7 +650,12 @@ export default defineContentScript({
       let textarea = findNoteTextarea();
       if (!textarea) { const clicked = clickNoteIcon(); if (clicked) { for (let i = 0; i < 15; i++) { await new Promise(r => setTimeout(r, 500)); textarea = findNoteTextarea(); if (textarea) break; } } }
       if (textarea) { textarea.focus(); textarea.value = noteText; textarea.dispatchEvent(new Event('input', { bubbles: true })); textarea.dispatchEvent(new Event('change', { bubbles: true })); statusEl.textContent = 'Pasted'; statusEl.style.color = '#16a34a'; textarea.style.border = '2px solid #16a34a'; setTimeout(() => { textarea!.style.border = ''; }, 2000); browser.storage.local.remove(['oper8er_paste_note', 'oper8er_paste_note_time']); }
-      else { statusEl.textContent = 'Staged — auto-pastes when form loads'; statusEl.style.color = '#2563eb'; }
+      else {
+        statusEl.textContent = 'Saved to pending notes'; statusEl.style.color = '#2563eb';
+        // Persist to Supabase so it survives session/navigation
+        try { browser.runtime.sendMessage({ type: 'SAVE_PENDING_NOTE', payload: { customer_name: leadData?.customerName || '', note_text: noteText, contact_id: null } }); } catch(e) {}
+        refreshPendingBadge();
+      }
     }
 
     // Paste email subject+body into VinSolutions Send Email popup

@@ -131,6 +131,49 @@ export default defineBackground(() => {
       }).catch(() => sendResponse([]));
       return true;
     }
+
+    // --- Pending Notes ---
+    if (msg.type === 'SAVE_PENDING_NOTE') {
+      browser.storage.sync.get(['dealer_token', 'rep_name']).then(async (settings) => {
+        if (!settings.dealer_token) { sendResponse({ error: 'No dealer_token' }); return; }
+        try {
+          const resp = await fetch(`${PROXY_URL}/api/pending-notes`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dealer_token: settings.dealer_token, rep_name: settings.rep_name || '', customer_name: msg.payload.customer_name || '', contact_id: msg.payload.contact_id || null, note_text: msg.payload.note_text })
+          });
+          const data = await resp.json();
+          sendResponse(data);
+        } catch(e: any) { sendResponse({ error: e.message }); }
+      });
+      return true;
+    }
+
+    if (msg.type === 'GET_PENDING_NOTES') {
+      browser.storage.sync.get(['dealer_token']).then(async (settings) => {
+        if (!settings.dealer_token) { sendResponse({ notes: [] }); return; }
+        try {
+          const resp = await fetch(`${PROXY_URL}/api/pending-notes?dealer_token=${encodeURIComponent(settings.dealer_token)}`);
+          const data = await resp.json();
+          sendResponse(data);
+        } catch(e: any) { sendResponse({ notes: [] }); }
+      });
+      return true;
+    }
+
+    if (msg.type === 'MARK_NOTE_LOGGED') {
+      browser.storage.sync.get(['dealer_token']).then(async (settings) => {
+        if (!settings.dealer_token) { sendResponse({ error: 'No token' }); return; }
+        try {
+          const resp = await fetch(`${PROXY_URL}/api/pending-notes/${msg.payload.id}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dealer_token: settings.dealer_token, status: msg.payload.status || 'logged' })
+          });
+          const data = await resp.json();
+          sendResponse(data);
+        } catch(e: any) { sendResponse({ error: e.message }); }
+      });
+      return true;
+    }
   });
 
   // ===== HEARTBEAT — fires every 5 minutes =====
