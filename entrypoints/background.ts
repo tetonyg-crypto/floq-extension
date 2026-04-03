@@ -215,8 +215,7 @@ async function handleGenerate(payload: {
 
   const sections = parseSections(text);
 
-  // Log with detected platform (non-blocking)
-  logGeneration(finalRepName, finalDealership, dealerToken, detectedPlatform, payload, text, sections).catch(() => {});
+  // Logging handled server-side in proxy (proxy_usage table) — no double logging
 
   return { text, sections };
 }
@@ -289,49 +288,12 @@ async function handleCommand(payload: { command: string; currentUrl?: string; ve
   const data = await resp.json();
   if (data.error) throw new Error(data.error);
 
-  // Log command as generation event
-  const parsed = data.parsed;
-  logGeneration(
-    settings.rep_name || '', settings.dealership || '', settings.dealer_token || '',
-    parsed.platform || 'internal', { repInput: payload.command, leadContext: {} },
-    parsed.content || '', { text: null, email: null, crm: null }
-  ).catch(() => {});
+  // Logging handled server-side in proxy — no double logging
 
   return data;
 }
 
-// --- Supabase Logging (non-blocking, includes platform) ---
-async function logGeneration(
-  repName: string, dealership: string, dealerToken: string,
-  detectedPlatform: string, payload: any, text: string, sections: any
-) {
-  const SUPABASE_URL = 'https://mqnmemnogbotgmsmqfie.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_-sD_RSqo9SNizbhQ0kqWSA_tJbsWD_m';
-
-  fetch(`${SUPABASE_URL}/rest/v1/generation_events`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'apikey': SUPABASE_KEY,
-      'Authorization': `Bearer ${SUPABASE_KEY}`,
-      'Prefer': 'return=minimal'
-    },
-    body: JSON.stringify({
-      session_id: `ext-${new Date().toISOString().split('T')[0]}-${repName.replace(/\s/g, '')}`,
-      rep_name: repName,
-      dealership: dealership,
-      input: payload.repInput || '',
-      output: text,
-      has_text: !!sections.text,
-      has_email: !!sections.email,
-      has_crm: !!sections.crm,
-      workflow_type: payload.type,
-      customer_name: payload.leadContext?.customerName || '',
-      vehicle: payload.leadContext?.vehicle || '',
-      platform: detectedPlatform,
-    })
-  }).catch(() => {});
-}
+// logGeneration removed — all logging consolidated to proxy-side (proxy_usage table)
 
 function buildUserMessage(payload: any, repName: string, dealership: string, repContext: string = ''): string {
   const lc = payload.leadContext || {};
