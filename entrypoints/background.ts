@@ -275,6 +275,7 @@ async function handleGenerate(payload: {
   repName: string;
   dealership: string;
   platform?: string;
+  metadata?: { workflow_type?: string; customer_name?: string | null; vehicle?: string | null };
 }) {
   const settings = await browser.storage.sync.get(['dealer_token']);
   const { repName, dealership, contextBlock } = await buildRepContext();
@@ -292,20 +293,27 @@ async function handleGenerate(payload: {
   if (!dealerToken) {
     throw new Error('No license key found. Complete onboarding at floqsales.com to activate Floq.');
   }
-  const result = await generateViaProxy(dealerToken, userMessage, detectedPlatform);
+
+  // Structured metadata for generation_events logging (sent alongside the prompt)
+  const metadata = {
+    rep_name: finalRepName,
+    workflow_type: payload.metadata?.workflow_type || payload.type || 'all',
+    customer_name: payload.metadata?.customer_name || payload.leadContext?.customerName || null,
+    vehicle: payload.metadata?.vehicle || payload.leadContext?.vehicle || null
+  };
+
+  const result = await generateViaProxy(dealerToken, userMessage, detectedPlatform, metadata);
   text = result.text;
   usage = result.usage;
 
   const sections = parseSections(text);
-
-  // Logging handled server-side in proxy (proxy_usage table) — no double logging
 
   return { text, sections };
 }
 
 // --- Generate via Proxy ---
 // Does NOT send system prompt — proxy resolves it from dealer's vertical_config
-async function generateViaProxy(dealerToken: string, userMessage: string, platform: string = 'chrome_extension') {
+async function generateViaProxy(dealerToken: string, userMessage: string, platform: string = 'chrome_extension', metadata?: any) {
   const resp = await fetch(`${PROXY_URL}/v1/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -314,7 +322,12 @@ async function generateViaProxy(dealerToken: string, userMessage: string, platfo
       messages: [{ role: 'user', content: userMessage }],
       max_tokens: 800,
       model: 'claude-sonnet-4-20250514',
-      platform: platform
+      platform: platform,
+      // Structured metadata for accurate generation_events logging
+      rep_name: metadata?.rep_name || null,
+      workflow_type: metadata?.workflow_type || null,
+      customer_name: metadata?.customer_name || null,
+      vehicle: metadata?.vehicle || null
     })
   });
 

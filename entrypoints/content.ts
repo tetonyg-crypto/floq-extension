@@ -634,7 +634,13 @@ export default defineContentScript({
             repInput: input,
             repName: '',
             dealership: '',
-            platform: platform
+            platform: platform,
+            // Structured metadata for generation_events logging
+            metadata: {
+              workflow_type: type === 'all' ? 'all' : type,
+              customer_name: leadData?.customerName || null,
+              vehicle: leadData?.vehicle || null
+            }
           }
         });
 
