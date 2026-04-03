@@ -215,7 +215,14 @@ export default defineContentScript({
       setTimeout(() => spaObserver.disconnect(), 8000); // give up after 8s
     }
 
-    // ===== HARD INJECTION GUARD =====
+    // ===== INJECTION GUARD — clean stale markers first =====
+    // Facebook/Instagram SPA navigation can leave stale markers from failed injects
+    if (isFacebook || isInstagram) {
+      const staleMarker = document.getElementById('floq-sidebar');
+      const staleHost = document.getElementById('oper8er-host');
+      // If marker exists but host is hidden/removed, clean up
+      if (staleMarker && !staleHost) staleMarker.remove();
+    }
     if (document.getElementById('floq-sidebar')) return;
     if (document.getElementById('oper8er-pill')) return;
     if (document.getElementById('oper8er-host')) return;
@@ -294,7 +301,8 @@ export default defineContentScript({
       const w = getSidebarWidth();
       // Gmail: LEFT side below header. All others: RIGHT side.
       if (isGmail) {
-        Object.assign(host.style, { position:'fixed', top:'64px', left:'0', width: w, height:'auto', maxHeight:'calc(100vh - 64px)', zIndex:'2147483647' });
+        // Position below Gmail labels section — labels nav ends around 200px from top
+        Object.assign(host.style, { position:'fixed', bottom:'0', left:'0', width: w, height:'auto', maxHeight:'calc(100vh - 200px)', zIndex:'2147483647' });
       } else if (!isVinSolutions) {
         // Cross-platform compact: right side, auto height
         Object.assign(host.style, { position:'fixed', top:'0', right:'0', width: w, height:'auto', maxHeight:'100vh', zIndex:'2147483647' });
@@ -535,61 +543,76 @@ export default defineContentScript({
       else { statusEl.textContent = 'Staged — auto-pastes when form loads'; statusEl.style.color = '#2563eb'; }
     }
 
-    // FIX 2: Paste email subject+body into VinSolutions Send Email popup
+    // Paste email subject+body into VinSolutions Send Email popup
     async function pasteIntoEmail(emailContent: string, statusEl: HTMLElement) {
-      if (!isVinSolutions) { statusEl.textContent = 'VinSolutions only'; return; }
+      if (!isVinSolutions) { navigator.clipboard.writeText(emailContent); statusEl.textContent = 'Copied'; statusEl.style.color = '#16a34a'; return; }
       statusEl.textContent = 'Finding email form...'; statusEl.style.color = '#2563eb';
 
-      // Parse subject and body from generated email
+      // Parse subject and body
       let subject = ''; let body = emailContent;
       const subjectMatch = emailContent.match(/^Subject:\s*(.+)/im);
-      if (subjectMatch) {
-        subject = subjectMatch[1].trim();
-        body = emailContent.slice(subjectMatch.index! + subjectMatch[0].length).trim();
+      if (subjectMatch) { subject = subjectMatch[1].trim(); body = emailContent.slice(subjectMatch.index! + subjectMatch[0].length).trim(); }
+      body = body.replace(/\*\*/g, '').replace(/\*/g, '').replace(/__/g, '').replace(/#{1,6}\s/g, '').trim();
+
+      // Search ALL iframes (nested too) for the email compose form
+      function tryInjectInDoc(doc: Document): boolean {
+        // Subject field
+        if (subject) {
+          const subj = doc.querySelector('input[id*="ubject"], input[name*="ubject"], input[id*="Subject"], input[name*="Subject"]') as HTMLInputElement;
+          if (subj) { subj.focus(); subj.value = subject; subj.dispatchEvent(new Event('input', { bubbles: true })); subj.dispatchEvent(new Event('change', { bubbles: true })); }
+        }
+        // Body: contenteditable > textarea > nested iframe body
+        const editable = doc.querySelector('[contenteditable="true"]') as HTMLElement;
+        if (editable) { editable.focus(); editable.innerText = body; editable.dispatchEvent(new Event('input', { bubbles: true })); return true; }
+        const ta = doc.querySelector('textarea') as HTMLTextAreaElement;
+        if (ta) { ta.focus(); ta.value = body; ta.dispatchEvent(new Event('input', { bubbles: true })); ta.dispatchEvent(new Event('change', { bubbles: true })); return true; }
+        // Nested iframe (rich text editor like TinyMCE)
+        for (const nf of doc.querySelectorAll('iframe')) {
+          try { const nd = nf.contentDocument || (nf as any).contentWindow?.document; if (nd?.body) { nd.body.innerText = body; return true; } } catch(e) {}
+        }
+        return false;
       }
-      // Strip any bold/markdown artifacts
-      body = body.replace(/\*\*/g, '').replace(/\*/g, '').replace(/__/g, '').replace(/_/g, ' ').replace(/#{1,6}\s/g, '');
 
-      // Find the sendemail iframe
-      const iframes = document.querySelectorAll('iframe');
       let found = false;
-      for (const iframe of iframes) {
+      // Search all iframes for email-related ones
+      const allIframes = document.querySelectorAll('iframe');
+      for (const iframe of allIframes) {
         try {
-          if (!iframe.src?.toLowerCase().includes('sendemail') && !iframe.src?.toLowerCase().includes('send_email') && !iframe.src?.toLowerCase().includes('email')) continue;
+          const src = (iframe.src || '').toLowerCase();
+          if (!src.includes('email') && !src.includes('sendemail') && !src.includes('send_email') && !src.includes('communication')) continue;
           const doc = iframe.contentDocument || (iframe as any).contentWindow?.document;
-          if (!doc) continue;
-
-          // Subject field
-          if (subject) {
-            const subjectInput = doc.querySelector('input[id*="ubject"], input[name*="ubject"], input[type="text"]') as HTMLInputElement;
-            if (subjectInput) { subjectInput.focus(); subjectInput.value = subject; subjectInput.dispatchEvent(new Event('input', { bubbles: true })); subjectInput.dispatchEvent(new Event('change', { bubbles: true })); }
-          }
-
-          // Body — try contenteditable first, then textarea, then nested iframe
-          const editableBody = doc.querySelector('[contenteditable="true"]') as HTMLElement;
-          if (editableBody) { editableBody.focus(); editableBody.innerText = body; editableBody.dispatchEvent(new Event('input', { bubbles: true })); found = true; break; }
-
-          const bodyTextarea = doc.querySelector('textarea') as HTMLTextAreaElement;
-          if (bodyTextarea) { bodyTextarea.focus(); bodyTextarea.value = body; bodyTextarea.dispatchEvent(new Event('input', { bubbles: true })); bodyTextarea.dispatchEvent(new Event('change', { bubbles: true })); found = true; break; }
-
-          // Nested iframe (rich text editor)
-          const nestedFrames = doc.querySelectorAll('iframe');
-          for (const nf of nestedFrames) {
-            try {
-              const nDoc = nf.contentDocument || (nf as any).contentWindow?.document;
-              if (nDoc?.body) { nDoc.body.innerText = body; found = true; break; }
-            } catch(e) {}
-          }
-          if (found) break;
+          if (doc && tryInjectInDoc(doc)) { found = true; break; }
         } catch(e) {}
+      }
+
+      // Also check popup windows via VinSolutions texting/email popups
+      if (!found) {
+        // The email popup is often a rims2.aspx Communication page — look for it
+        for (const iframe of allIframes) {
+          try {
+            const src = (iframe.src || '').toLowerCase();
+            if (!src.includes('rims2') && !src.includes('communication')) continue;
+            const doc = iframe.contentDocument || (iframe as any).contentWindow?.document;
+            if (!doc) continue;
+            // Search nested iframes inside this communication frame
+            for (const inner of doc.querySelectorAll('iframe')) {
+              try {
+                const innerDoc = inner.contentDocument || (inner as any).contentWindow?.document;
+                if (innerDoc && tryInjectInDoc(innerDoc)) { found = true; break; }
+              } catch(e) {}
+            }
+            if (found) break;
+          } catch(e) {}
+        }
       }
 
       if (found) {
         statusEl.textContent = 'Pasted to email'; statusEl.style.color = '#16a34a';
       } else {
-        // Stage it for later
+        // Fallback: copy to clipboard + stage for auto-paste
+        navigator.clipboard.writeText(emailContent);
         await browser.storage.local.set({ oper8er_paste_email_subject: subject, oper8er_paste_email_body: body, oper8er_paste_email_time: Date.now() });
-        statusEl.textContent = 'Staged — open Send Email and it will auto-paste'; statusEl.style.color = '#2563eb';
+        statusEl.textContent = 'Copied — paste into email manually'; statusEl.style.color = '#2563eb';
       }
     }
 
@@ -599,33 +622,46 @@ export default defineContentScript({
       const isCRM = label === 'CRM NOTE';
       const isEmail = label === 'EMAIL' || label === 'EMAIL REPLY';
 
-      // FIX 1: Message/Email get "Copy + Log", CRM gets "Paste to CRM", Email on VIN gets "Paste to Email"
-      let actionBtns = '<button class="out-copy">Copy + Log</button>';
-      if (isCRM && isVinSolutions) actionBtns = '<button class="out-copy">Copy</button><button class="out-paste">Paste to CRM</button>';
-      if (isEmail && isVinSolutions) actionBtns = '<button class="out-copy">Copy + Log</button><button class="out-paste-email">Paste to Email</button>';
+      // ONE button per output type
+      let actionBtn = '';
+      if (isCRM && isVinSolutions) actionBtn = '<button class="out-action out-paste">Paste to CRM</button>';
+      else if (isEmail && isVinSolutions) actionBtn = '<button class="out-action out-send-email">Send to Email</button>';
+      else actionBtn = '<button class="out-action out-copy">Copy + Log</button>';
 
-      card.innerHTML = `<div class="out-label">${esc(label)}</div><div class="out-text">${esc(content).replace(/\n/g, '<br>')}</div><div class="out-actions">${actionBtns}</div>${(isCRM || isEmail) && isVinSolutions ? '<div class="out-paste-status"></div>' : ''}`;
+      card.innerHTML = `<div class="out-label">${esc(label)}</div><div class="out-text">${esc(content).replace(/\n/g, '<br>')}</div><div class="out-actions">${actionBtn}</div><div class="out-status"></div>`;
 
-      // Copy + Log: copies to clipboard AND logs to generation_events via background
-      card.querySelector('.out-copy')!.addEventListener('click', function(this: HTMLElement) {
-        navigator.clipboard.writeText(content);
-        this.textContent = 'Copied'; this.style.background = '#16a34a'; this.style.color = '#fff';
-        // Fire-and-forget log
-        try { browser.runtime.sendMessage({ type: 'LOG_COPY', payload: { label, platform: PLATFORM, customer: leadData?.customerName || null } }); } catch(e) {}
-        setTimeout(() => { this.textContent = isCRM ? 'Copy' : 'Copy + Log'; this.style.background = ''; this.style.color = ''; }, 1500);
-      });
-
-      // Paste to CRM (CRM Note only)
-      if (isCRM && isVinSolutions) {
-        card.querySelector('.out-paste')!.addEventListener('click', function(this: HTMLElement) { const st = card.querySelector('.out-paste-status') as HTMLElement; (this as any).disabled = true; this.textContent = 'Pasting...'; pasteIntoCRM(content, st).then(() => { this.textContent = 'Paste to CRM'; (this as any).disabled = false; }); });
+      // Text: Copy + Log
+      const copyBtn = card.querySelector('.out-copy');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', function(this: HTMLElement) {
+          navigator.clipboard.writeText(content);
+          this.textContent = 'Copied'; this.style.background = '#16a34a'; this.style.color = '#fff';
+          try { browser.runtime.sendMessage({ type: 'LOG_COPY', payload: { label, platform: PLATFORM, customer: leadData?.customerName || null } }); } catch(e) {}
+          setTimeout(() => { this.textContent = 'Copy + Log'; this.style.background = ''; this.style.color = ''; }, 1500);
+        });
       }
 
-      // FIX 2: Paste to Email (Email on VinSolutions)
-      if (isEmail && isVinSolutions) {
-        card.querySelector('.out-paste-email')!.addEventListener('click', function(this: HTMLElement) {
-          const st = card.querySelector('.out-paste-status') as HTMLElement;
+      // CRM Note: Paste to CRM
+      const pasteBtn = card.querySelector('.out-paste');
+      if (pasteBtn && isCRM && isVinSolutions) {
+        pasteBtn.addEventListener('click', function(this: HTMLElement) {
+          const st = card.querySelector('.out-status') as HTMLElement;
           (this as any).disabled = true; this.textContent = 'Pasting...';
-          pasteIntoEmail(content, st).then(() => { this.textContent = 'Paste to Email'; (this as any).disabled = false; });
+          pasteIntoCRM(content, st).then(() => { this.textContent = 'Paste to CRM'; (this as any).disabled = false; });
+        });
+      }
+
+      // Email: Send to Email — inject into popup OR copy
+      const sendBtn = card.querySelector('.out-send-email');
+      if (sendBtn && isEmail && isVinSolutions) {
+        sendBtn.addEventListener('click', function(this: HTMLElement) {
+          const st = card.querySelector('.out-status') as HTMLElement;
+          (this as any).disabled = true; this.textContent = 'Sending...';
+          pasteIntoEmail(content, st).then(() => {
+            this.textContent = 'Send to Email'; (this as any).disabled = false;
+            // Also log
+            try { browser.runtime.sendMessage({ type: 'LOG_COPY', payload: { label: 'EMAIL_SENT', platform: PLATFORM, customer: leadData?.customerName || null } }); } catch(e) {}
+          });
         });
       }
 
@@ -776,9 +812,10 @@ export default defineContentScript({
 .out-label { font-size:9px; font-weight:700; color:#7F77DD; letter-spacing:1px; text-transform:uppercase; margin-bottom:4px; }
 .out-text { font-size:12px; line-height:1.5; max-height:180px; overflow-y:auto; }
 .out-actions { display:flex; gap:6px; margin-top:6px; }
-.out-copy { padding:4px 12px; background:#f0f2f5; border:1px solid #dde1e6; border-radius:4px; font-size:11px; font-weight:600; color:#475569; cursor:pointer; font-family:inherit; } .out-copy:hover { background:#e2e8f0; }
-.out-paste, .out-paste-email { padding:4px 12px; background:#2563eb; border:1px solid #1d4ed8; border-radius:4px; font-size:11px; font-weight:600; color:#fff; cursor:pointer; font-family:inherit; } .out-paste:hover, .out-paste-email:hover { background:#1d4ed8; }
-.out-paste-status { font-size:10px; margin-top:4px; min-height:14px; }
+.out-status { font-size:10px; margin-top:4px; min-height:14px; }
+.out-action { padding:5px 14px; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer; font-family:inherit; transition:all .15s; }
+.out-copy { background:#f0f2f5; border:1px solid #dde1e6; color:#475569; } .out-copy:hover { background:#e2e8f0; }
+.out-paste, .out-send-email { background:#7F77DD; border:1px solid #6B63C7; color:#fff; } .out-paste:hover, .out-send-email:hover { background:#534AB7; }
 .tools-panel { display:flex; flex-direction:column; flex:1; overflow:hidden; }
 .tools-header { padding:10px 14px; border-bottom:1px solid #e8eaed; display:flex; align-items:center; gap:8px; }
 .back-btn { background:none; border:none; color:#7F77DD; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit; } .tools-title { font-size:13px; font-weight:600; }
