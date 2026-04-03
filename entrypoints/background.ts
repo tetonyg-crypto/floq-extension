@@ -29,8 +29,8 @@ export default defineBackground(() => {
 
     if (msg.type === 'CHECK_FEATURES') {
       browser.storage.local.get(['floq_tier', 'floq_features']).then(data => {
-        sendResponse({ tier: data.floq_tier || 'core', features: data.floq_features || getTierFeatures('core') });
-      }).catch(() => sendResponse({ tier: 'core', features: getTierFeatures('core') }));
+        sendResponse({ tier: data.floq_tier || 'floor', features: data.floq_features || getTierFeatures('floor') });
+      }).catch(() => sendResponse({ tier: 'floor', features: getTierFeatures('floor') }));
       return true;
     }
 
@@ -399,12 +399,51 @@ async function reportError(errorType: string, errorMessage: string) {
 
 // ===== FEATURE GATING =====
 function getTierFeatures(tier: string) {
-  const base = { vinsolutions: true, facebook: false, gmail: false, linkedin: false, command_mode: false, voice_coach: false, campaigns: false };
-  if (tier === 'pro' || tier === 'elite') {
-    base.facebook = true; base.gmail = true; base.linkedin = true;
-    base.command_mode = true; base.voice_coach = true;
+  // Normalize legacy tier names
+  if (tier === 'core') tier = 'floor';
+  if (tier === 'pro') tier = 'command';
+  if (tier === 'elite') tier = 'group';
+
+  const base: Record<string, boolean> = {
+    vinsolutions: true,
+    generation: true,
+    basic_logging: true,
+    gm_dashboard: false,
+    ghost_leads: false,
+    rep_leaderboard: false,
+    objection_tracking: false,
+    facebook: false,
+    gmail: false,
+    linkedin: false,
+    voice_coach: false,
+    command_mode: false,
+    campaigns: false,
+    multi_location: false,
+    owner_dashboard: false,
+    priority_support: false,
+    automated_reactivation: false
+  };
+
+  if (tier === 'command' || tier === 'group') {
+    base.gm_dashboard = true;
+    base.ghost_leads = true;
+    base.rep_leaderboard = true;
+    base.objection_tracking = true;
+    base.facebook = true;
+    base.gmail = true;
+    base.linkedin = true;
+    base.voice_coach = true;
+    base.command_mode = true;
   }
-  if (tier === 'elite') { base.campaigns = true; }
+
+  if (tier === 'group') {
+    base.campaigns = true;
+    base.multi_location = true;
+    base.owner_dashboard = true;
+    base.priority_support = true;
+    base.automated_reactivation = true;
+  }
+
   return base;
 }
 

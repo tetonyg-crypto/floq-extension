@@ -74,6 +74,25 @@ export default defineContentScript({
     let sidebarOpen = false;
     let sidebarRoot: HTMLElement | null = null;
 
+    // Feature gating helper — shows upgrade message in output area
+    async function checkFeatureGate(feature: string, outputEl: HTMLElement): Promise<boolean> {
+      try {
+        const resp = await browser.runtime.sendMessage({ type: 'CHECK_FEATURES' });
+        const features = resp?.features || {};
+        if (features[feature]) return true;
+
+        // Show gated message
+        if (feature === 'gm_dashboard') {
+          outputEl.innerHTML = '<div style="padding:14px;background:#F0EFFF;border:1px solid #7F77DD;border-radius:8px;margin:8px 14px;font-size:12px;line-height:1.6;color:#534AB7">Floor insights are available in Floq Command. Ask your GM to upgrade at floqsales.com</div>';
+        } else if (feature === 'voice_coach' || feature === 'command_mode') {
+          outputEl.innerHTML = '<div style="padding:14px;background:#F0EFFF;border:1px solid #7F77DD;border-radius:8px;margin:8px 14px;font-size:12px;line-height:1.6;color:#534AB7">This feature is available in Floq Command starting at $4,999/mo. Talk to your account manager.</div>';
+        } else if (feature === 'facebook' || feature === 'gmail' || feature === 'linkedin') {
+          outputEl.innerHTML = '<div style="padding:14px;background:#F0EFFF;border:1px solid #7F77DD;border-radius:8px;margin:8px 14px;font-size:12px;line-height:1.6;color:#534AB7">Cross-platform generation is available in Floq Command starting at $4,999/mo. Talk to your account manager.</div>';
+        }
+        return false;
+      } catch(e) { return true; } // Fail open so demo doesn't break
+    }
+
     // ===== VINSOLUTIONS AUTO-SCAN (only runs on VinSolutions domains) =====
     const MAKES = 'Chevrolet|Chevy|Subaru|Toyota|Ford|Ram|Dodge|Jeep|GMC|Honda|Nissan|Hyundai|Kia|BMW|Mercedes|Buick|Cadillac|Lexus|Acura|Audi|Volvo|Mazda|Chrysler|Lincoln|Infiniti|Volkswagen|VW|Porsche|Tesla|Rivian';
     const STOP_WORDS = 'Created|Attempted|Contacted|Looking|Wants|Also|Stock|Source|Status|miles|General|Customer|Interested|Trade|lineup|options|inventory|Calculated|Equity|Payoff|hover|details|Bad|Sold|Active|Lost';
@@ -334,8 +353,31 @@ export default defineContentScript({
 
       // ===== TAB SWITCHING =====
       s.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
           const tab = (btn as HTMLElement).dataset.tab!;
+
+          // Feature gate: coach and command require Floq Command tier
+          if (tab === 'coach') {
+            const outputEl = s.getElementById('o8-coach-output');
+            if (outputEl && !(await checkFeatureGate('voice_coach', outputEl))) {
+              s.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+              s.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+              btn.classList.add('active');
+              s.getElementById('tab-coach')?.classList.add('active');
+              return;
+            }
+          }
+          if (tab === 'command') {
+            const outputEl = s.getElementById('o8-cmd-output') || s.getElementById('tab-command');
+            if (outputEl && !(await checkFeatureGate('command_mode', outputEl))) {
+              s.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+              s.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+              btn.classList.add('active');
+              s.getElementById('tab-command')?.classList.add('active');
+              return;
+            }
+          }
+
           s.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
           s.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
           btn.classList.add('active');
@@ -558,6 +600,13 @@ export default defineContentScript({
 
     // ===== GENERATE =====
     async function doGenerate(s: ShadowRoot) {
+      // Platform feature gate: Gmail/Facebook/LinkedIn require Floq Command
+      if (isGmail || isFacebook || isLinkedIn) {
+        const featureKey = isGmail ? 'gmail' : isFacebook ? 'facebook' : 'linkedin';
+        const outputEl = s.getElementById('o8-outputs');
+        if (outputEl && !(await checkFeatureGate(featureKey, outputEl))) return;
+      }
+
       const input = (s.getElementById('o8-input') as HTMLTextAreaElement).value.trim();
       if (!input && !leadData?.customerName) return;
 

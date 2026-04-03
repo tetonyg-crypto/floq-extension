@@ -5,8 +5,8 @@ export default defineConfig({
   manifest: {
     name: 'Floq — AI Sales Assistant',
     short_name: 'Floq',
-    version: '1.3.0',
-    version_name: '1.3.0',
+    version: '1.4.0',
+    version_name: '1.4.0',
     description: 'AI-powered sales execution for dealership reps. Generate texts, emails, and CRM notes in seconds. Command Mode: speak or type commands and Floq does the rest.',
     icons: {
       '16': 'icons/icon-16.png',
