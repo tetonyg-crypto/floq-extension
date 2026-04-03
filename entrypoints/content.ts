@@ -73,6 +73,7 @@ export default defineContentScript({
     let leadData: any = null;
     let sidebarOpen = false;
     let sidebarRoot: HTMLElement | null = null;
+    let isGenerating = false;
 
     // Feature gating helper — shows upgrade message in output area
     async function checkFeatureGate(feature: string, outputEl: HTMLElement): Promise<boolean> {
@@ -600,19 +601,23 @@ export default defineContentScript({
 
     // ===== GENERATE =====
     async function doGenerate(s: ShadowRoot) {
+      // Debounce: prevent double-click generating twice
+      if (isGenerating) return;
+      isGenerating = true;
+
       // Platform feature gate: Gmail/Facebook/LinkedIn require Floq Command
       if (isGmail || isFacebook || isLinkedIn) {
         const featureKey = isGmail ? 'gmail' : isFacebook ? 'facebook' : 'linkedin';
         const outputEl = s.getElementById('o8-outputs');
-        if (outputEl && !(await checkFeatureGate(featureKey, outputEl))) return;
+        if (outputEl && !(await checkFeatureGate(featureKey, outputEl))) { isGenerating = false; return; }
       }
 
       const input = (s.getElementById('o8-input') as HTMLTextAreaElement).value.trim();
-      if (!input && !leadData?.customerName) return;
+      if (!input && !leadData?.customerName) { isGenerating = false; return; }
 
       const chips = s.querySelectorAll('.chip.on');
       const selected = Array.from(chips).map(c => c.getAttribute('data-type'));
-      if (selected.length === 0) return;
+      if (selected.length === 0) { isGenerating = false; return; }
 
       const type = selected.length === 3 ? 'all' : selected.length === 1 ? selected[0]! : 'all';
 
@@ -640,13 +645,16 @@ export default defineContentScript({
           if (selected.includes('text') && sec.text) addOutput(s, outputLabels.text, sec.text);
           if (selected.includes('email') && sec.email) addOutput(s, outputLabels.email, sec.email);
           if (selected.includes('crm') && sec.crm) addOutput(s, outputLabels.crm, sec.crm);
-          if (!sec.text && !sec.email && !sec.crm) addOutput(s, 'OUTPUT', response.text);
+          if (!sec.text && !sec.email && !sec.crm) {
+            addOutput(s, 'OUTPUT', response.text || 'Generation returned empty — try rephrasing your input or check that a customer is loaded.');
+          }
         }
       } catch (e: any) {
         addOutput(s, 'Error', e.message);
       }
 
       btn.textContent = '✨ Generate'; btn.disabled = false; btn.style.background = '#7F77DD';
+      isGenerating = false;
     }
 
     // ===== PASTE TO CRM (VinSolutions only) =====

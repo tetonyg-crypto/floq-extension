@@ -132,17 +132,31 @@ async function validateLicense(key: string) {
   const headers = { 'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}` };
   try {
     // Check dealerships table first (matches proxy /api/validate logic)
-    const dlResp = await fetch(`${SB_URL}/rest/v1/dealerships?license_key=eq.${encodeURIComponent(key)}&subscription_status=eq.active&limit=1`, { headers });
+    const dlResp = await fetch(`${SB_URL}/rest/v1/dealerships?license_key=eq.${encodeURIComponent(key)}&subscription_status=eq.active&select=name,tier&limit=1`, { headers });
     const dlRows = await dlResp.json();
     if (dlRows.length > 0) {
+      // Auto-fill dealership name from DB so rep can't mistype it
+      const dbName = dlRows[0].name;
+      if (dbName) {
+        profileData.dealership.name = dbName;
+        const nameInput = document.getElementById('s2-dealership') as HTMLInputElement;
+        if (nameInput) { nameInput.value = dbName; nameInput.readOnly = true; nameInput.style.opacity = '0.7'; }
+      }
       document.getElementById('s2-license-ok')!.style.display = 'block';
       document.getElementById('s2-license-err')!.style.display = 'none';
       return true;
     }
     // Fallback: legacy dealer_tokens table
-    const resp = await fetch(`${SB_URL}/rest/v1/dealer_tokens?token=eq.${encodeURIComponent(key)}&active=eq.true&limit=1`, { headers });
+    const resp = await fetch(`${SB_URL}/rest/v1/dealer_tokens?token=eq.${encodeURIComponent(key)}&active=eq.true&select=dealership&limit=1`, { headers });
     const rows = await resp.json();
     if (rows.length > 0) {
+      // Auto-fill from legacy token
+      const dbName = rows[0].dealership;
+      if (dbName) {
+        profileData.dealership.name = dbName;
+        const nameInput = document.getElementById('s2-dealership') as HTMLInputElement;
+        if (nameInput) { nameInput.value = dbName; nameInput.readOnly = true; nameInput.style.opacity = '0.7'; }
+      }
       document.getElementById('s2-license-ok')!.style.display = 'block';
       document.getElementById('s2-license-err')!.style.display = 'none';
       return true;

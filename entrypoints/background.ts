@@ -28,8 +28,14 @@ export default defineBackground(() => {
     }
 
     if (msg.type === 'CHECK_FEATURES') {
-      browser.storage.local.get(['floq_tier', 'floq_features']).then(data => {
-        sendResponse({ tier: data.floq_tier || 'floor', features: data.floq_features || getTierFeatures('floor') });
+      browser.storage.local.get(['floq_tier', 'floq_features', 'floq_last_heartbeat']).then(data => {
+        // If heartbeat is older than 30 minutes, fall back to floor tier for safety
+        const stale = !data.floq_last_heartbeat || (Date.now() - data.floq_last_heartbeat > 30 * 60 * 1000);
+        if (stale) {
+          sendResponse({ tier: 'floor', features: getTierFeatures('floor') });
+        } else {
+          sendResponse({ tier: data.floq_tier || 'floor', features: data.floq_features || getTierFeatures('floor') });
+        }
       }).catch(() => sendResponse({ tier: 'floor', features: getTierFeatures('floor') }));
       return true;
     }
@@ -125,7 +131,7 @@ export default defineBackground(() => {
           license_key: settings.dealer_token,
           rep_name: settings.rep_name || 'Unknown',
           dealership: settings.dealership || '',
-          extension_version: manifest.version || '1.3.0',
+          extension_version: manifest.version || '1.4.0',
           platform: platform,
           timestamp: new Date().toISOString()
         })
@@ -134,7 +140,7 @@ export default defineBackground(() => {
         const data = await resp.json();
         // Store tier + features from heartbeat response for feature gating
         if (data.tier) {
-          await browser.storage.local.set({ floq_tier: data.tier, floq_features: data.features || {} });
+          await browser.storage.local.set({ floq_tier: data.tier, floq_features: data.features || {}, floq_last_heartbeat: Date.now() });
         }
       }
     } catch(e) {
@@ -156,7 +162,7 @@ export default defineBackground(() => {
           license_key: settings.dealer_token,
           rep_name: settings.rep_name || 'Unknown',
           dealership: settings.dealership || '',
-          extension_version: manifest.version || '1.3.0',
+          extension_version: manifest.version || '1.4.0',
           platform: 'startup',
           timestamp: new Date().toISOString()
         })
@@ -390,7 +396,7 @@ async function reportError(errorType: string, errorMessage: string) {
         dealership: settings.dealership || '',
         error_type: errorType,
         error_message: errorMessage.slice(0, 500),
-        extension_version: manifest.version || '1.3.0',
+        extension_version: manifest.version || '1.4.0',
         platform: platform
       })
     });
