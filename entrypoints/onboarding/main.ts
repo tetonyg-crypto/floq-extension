@@ -127,10 +127,20 @@ function next(from: number) {
 function prev(from: number) { collectCurrentStep(); saveProgress(); goToStep(from - 1); }
 
 async function validateLicense(key: string) {
+  const SB_URL = 'https://mqnmemnogbotgmsmqfie.supabase.co';
+  const SB_KEY = 'sb_publishable_-sD_RSqo9SNizbhQ0kqWSA_tJbsWD_m';
+  const headers = { 'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}` };
   try {
-    const resp = await fetch(`https://mqnmemnogbotgmsmqfie.supabase.co/rest/v1/dealer_tokens?token=eq.${encodeURIComponent(key)}&active=eq.true&limit=1`, {
-      headers: { 'apikey': 'sb_publishable_-sD_RSqo9SNizbhQ0kqWSA_tJbsWD_m', 'Authorization': 'Bearer sb_publishable_-sD_RSqo9SNizbhQ0kqWSA_tJbsWD_m' }
-    });
+    // Check dealerships table first (matches proxy /api/validate logic)
+    const dlResp = await fetch(`${SB_URL}/rest/v1/dealerships?license_key=eq.${encodeURIComponent(key)}&subscription_status=eq.active&limit=1`, { headers });
+    const dlRows = await dlResp.json();
+    if (dlRows.length > 0) {
+      document.getElementById('s2-license-ok')!.style.display = 'block';
+      document.getElementById('s2-license-err')!.style.display = 'none';
+      return true;
+    }
+    // Fallback: legacy dealer_tokens table
+    const resp = await fetch(`${SB_URL}/rest/v1/dealer_tokens?token=eq.${encodeURIComponent(key)}&active=eq.true&limit=1`, { headers });
     const rows = await resp.json();
     if (rows.length > 0) {
       document.getElementById('s2-license-ok')!.style.display = 'block';
