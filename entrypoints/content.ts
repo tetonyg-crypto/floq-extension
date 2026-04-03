@@ -1,5 +1,5 @@
 /**
- * Floq v1.6.1 — Platform fixes, Settings panel, consistent right-side injection.
+ * Floq v1.7.0 — Pending notes, single-action buttons, platform fixes.
  * All platforms: sidebar on RIGHT, never left. No double injection.
  * Gmail: collapsed by default, 280px. Instagram DMs + FB Marketplace conversations added.
  * LinkedIn: messaging only. Facebook: messages + marketplace/t only.

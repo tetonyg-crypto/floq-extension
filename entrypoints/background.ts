@@ -194,7 +194,7 @@ export default defineBackground(() => {
           license_key: settings.dealer_token,
           rep_name: settings.rep_name || 'Unknown',
           dealership: settings.dealership || '',
-          extension_version: manifest.version || '1.4.0',
+          extension_version: manifest.version || '1.7.0',
           platform: platform,
           timestamp: new Date().toISOString()
         })
@@ -225,7 +225,7 @@ export default defineBackground(() => {
           license_key: settings.dealer_token,
           rep_name: settings.rep_name || 'Unknown',
           dealership: settings.dealership || '',
-          extension_version: manifest.version || '1.4.0',
+          extension_version: manifest.version || '1.7.0',
           platform: 'startup',
           timestamp: new Date().toISOString()
         })
@@ -521,7 +521,7 @@ async function reportError(errorType: string, errorMessage: string) {
         dealership: settings.dealership || '',
         error_type: errorType,
         error_message: errorMessage.slice(0, 500),
-        extension_version: manifest.version || '1.4.0',
+        extension_version: manifest.version || '1.7.0',
         platform: platform
       })
     });
