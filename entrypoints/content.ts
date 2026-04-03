@@ -18,6 +18,7 @@ function detectPlatform(): Platform {
   if (url.includes('facebook.com/marketplace/t/')) return 'facebook';
   if (url.includes('facebook.com')) return 'unknown';
   if (url.includes('linkedin.com/messaging')) return 'linkedin';
+  if (url.includes('linkedin.com/in/')) return 'linkedin';
   if (url.includes('linkedin.com')) return 'unknown';
   if (url.includes('instagram.com/direct')) return 'instagram';
   if (url.includes('instagram.com')) return 'unknown';
@@ -36,7 +37,9 @@ export default defineContentScript({
     '*://www.facebook.com/marketplace/t/*',
     '*://www.messenger.com/*',
     '*://www.linkedin.com/messaging/*',
+    '*://www.linkedin.com/in/*',
     '*://www.instagram.com/direct/*',
+    '*://www.instagram.com/direct/t/*',
     '*://web.whatsapp.com/*'
   ],
   allFrames: true,
@@ -192,6 +195,26 @@ export default defineContentScript({
     if (!isVinSolutions && window !== window.top) return;
     if (isVinSolutions && bodyText.length < 500) return;
 
+    // FIX 7: VinSolutions dashboard guard — only inject when customer panel is likely present
+    if (isVinSolutions && isUIFrame) {
+      const vinUrl = window.location.href.toLowerCase();
+      const hasCustomerPanel = bodyText.includes('Customer Dashboard') || bodyText.includes('(Individual)') || bodyText.includes('(Business)') || vinUrl.includes('leadmanagement') || vinUrl.includes('customer');
+      if (!hasCustomerPanel) {
+        // Watch for customer panel to appear, then inject
+        const vinObserver = new MutationObserver(() => {
+          const t = document.body?.innerText || '';
+          if (t.includes('Customer Dashboard') || t.includes('(Individual)') || t.includes('(Business)')) {
+            vinObserver.disconnect();
+            if (!document.getElementById('oper8er-pill')) location.reload(); // re-trigger content script
+          }
+        });
+        vinObserver.observe(document.body, { childList: true, subtree: true });
+        // Allow pill after 3 seconds even if no customer (rep may navigate)
+        setTimeout(() => { vinObserver.disconnect(); }, 3000);
+        return; // Don't inject pill yet
+      }
+    }
+
     // ===== HARD INJECTION GUARD =====
     if (document.getElementById('floq-sidebar')) return;
     if (document.getElementById('oper8er-pill')) return;
@@ -207,10 +230,12 @@ export default defineContentScript({
     const pill = document.createElement('div');
     pill.id = 'oper8er-pill';
     pill.textContent = '⚡ FQ';
-    // FIX 9: ALL platforms on the RIGHT side
+    // Pill position: Gmail LEFT, all others RIGHT
+    const pillSide = isGmail ? 'left' : 'right';
+    const pillRadius = isGmail ? '0 6px 6px 0' : '6px 0 0 6px';
     Object.assign(pill.style, {
-      position:'fixed', right:'0', top:'50%', transform:'translateY(-50%)', zIndex:'2147483646',
-      background:'#7F77DD', color:'#fff', padding:'6px 8px 6px 6px', borderRadius:'6px 0 0 6px',
+      position:'fixed', [pillSide]:'0', top:'50%', transform:'translateY(-50%)', zIndex:'2147483646',
+      background:'#7F77DD', color:'#fff', padding:'6px 8px 6px 6px', borderRadius: pillRadius,
       fontSize:'11px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'pointer',
       boxShadow:'0 2px 8px rgba(127,119,221,0.25)', letterSpacing:'0.5px', opacity:'0.85',
       transition:'opacity 0.15s, padding 0.15s'
@@ -267,8 +292,12 @@ export default defineContentScript({
       const host = document.createElement('div');
       host.id = 'oper8er-host';
       const w = getSidebarWidth();
-      // FIX 1 + FIX 9: Always right side, fixed position
-      Object.assign(host.style, { position:'fixed', top:'0', right:'0', width: w, height:'100vh', zIndex:'2147483647' });
+      // Gmail: LEFT side below header. All others: RIGHT side.
+      if (isGmail) {
+        Object.assign(host.style, { position:'fixed', top:'64px', left:'0', width: w, height:'calc(100vh - 64px)', zIndex:'2147483647' });
+      } else {
+        Object.assign(host.style, { position:'fixed', top:'0', right:'0', width: w, height:'100vh', zIndex:'2147483647' });
+      }
 
       const shadow = host.attachShadow({ mode: 'open' });
       const style = document.createElement('style'); style.textContent = getCSS(w); shadow.appendChild(style);
@@ -427,7 +456,7 @@ export default defineContentScript({
       }
       if (isGmail) {
         const gmailMain = document.querySelector('.nH') as HTMLElement;
-        if (gmailMain) gmailMain.style.marginRight = open ? w : '0';
+        if (gmailMain) gmailMain.style.marginLeft = open ? w : '0';
       }
     }
 
@@ -499,13 +528,100 @@ export default defineContentScript({
       else { statusEl.textContent = 'Staged — auto-pastes when form loads'; statusEl.style.color = '#2563eb'; }
     }
 
+    // FIX 2: Paste email subject+body into VinSolutions Send Email popup
+    async function pasteIntoEmail(emailContent: string, statusEl: HTMLElement) {
+      if (!isVinSolutions) { statusEl.textContent = 'VinSolutions only'; return; }
+      statusEl.textContent = 'Finding email form...'; statusEl.style.color = '#2563eb';
+
+      // Parse subject and body from generated email
+      let subject = ''; let body = emailContent;
+      const subjectMatch = emailContent.match(/^Subject:\s*(.+)/im);
+      if (subjectMatch) {
+        subject = subjectMatch[1].trim();
+        body = emailContent.slice(subjectMatch.index! + subjectMatch[0].length).trim();
+      }
+      // Strip any bold/markdown artifacts
+      body = body.replace(/\*\*/g, '').replace(/\*/g, '').replace(/__/g, '').replace(/_/g, ' ').replace(/#{1,6}\s/g, '');
+
+      // Find the sendemail iframe
+      const iframes = document.querySelectorAll('iframe');
+      let found = false;
+      for (const iframe of iframes) {
+        try {
+          if (!iframe.src?.toLowerCase().includes('sendemail') && !iframe.src?.toLowerCase().includes('send_email') && !iframe.src?.toLowerCase().includes('email')) continue;
+          const doc = iframe.contentDocument || (iframe as any).contentWindow?.document;
+          if (!doc) continue;
+
+          // Subject field
+          if (subject) {
+            const subjectInput = doc.querySelector('input[id*="ubject"], input[name*="ubject"], input[type="text"]') as HTMLInputElement;
+            if (subjectInput) { subjectInput.focus(); subjectInput.value = subject; subjectInput.dispatchEvent(new Event('input', { bubbles: true })); subjectInput.dispatchEvent(new Event('change', { bubbles: true })); }
+          }
+
+          // Body — try contenteditable first, then textarea, then nested iframe
+          const editableBody = doc.querySelector('[contenteditable="true"]') as HTMLElement;
+          if (editableBody) { editableBody.focus(); editableBody.innerText = body; editableBody.dispatchEvent(new Event('input', { bubbles: true })); found = true; break; }
+
+          const bodyTextarea = doc.querySelector('textarea') as HTMLTextAreaElement;
+          if (bodyTextarea) { bodyTextarea.focus(); bodyTextarea.value = body; bodyTextarea.dispatchEvent(new Event('input', { bubbles: true })); bodyTextarea.dispatchEvent(new Event('change', { bubbles: true })); found = true; break; }
+
+          // Nested iframe (rich text editor)
+          const nestedFrames = doc.querySelectorAll('iframe');
+          for (const nf of nestedFrames) {
+            try {
+              const nDoc = nf.contentDocument || (nf as any).contentWindow?.document;
+              if (nDoc?.body) { nDoc.body.innerText = body; found = true; break; }
+            } catch(e) {}
+          }
+          if (found) break;
+        } catch(e) {}
+      }
+
+      if (found) {
+        statusEl.textContent = 'Pasted to email'; statusEl.style.color = '#16a34a';
+      } else {
+        // Stage it for later
+        await browser.storage.local.set({ oper8er_paste_email_subject: subject, oper8er_paste_email_body: body, oper8er_paste_email_time: Date.now() });
+        statusEl.textContent = 'Staged — open Send Email and it will auto-paste'; statusEl.style.color = '#2563eb';
+      }
+    }
+
     function addOutput(s: ShadowRoot, label: string, content: string, containerId: string = 'o8-outputs') {
       const container = s.getElementById(containerId) || s.getElementById('o8-outputs')!;
       const card = document.createElement('div'); card.className = 'out-card';
       const isCRM = label === 'CRM NOTE';
-      card.innerHTML = `<div class="out-label">${esc(label)}</div><div class="out-text">${esc(content).replace(/\n/g, '<br>')}</div><div class="out-actions"><button class="out-copy">Copy</button>${isCRM && isVinSolutions ? '<button class="out-paste">Paste to CRM</button>' : ''}</div>${isCRM && isVinSolutions ? '<div class="out-paste-status"></div>' : ''}`;
-      card.querySelector('.out-copy')!.addEventListener('click', function(this: HTMLElement) { navigator.clipboard.writeText(content); this.textContent = 'Copied'; this.style.background = '#16a34a'; this.style.color = '#fff'; setTimeout(() => { this.textContent = 'Copy'; this.style.background = ''; this.style.color = ''; }, 1500); });
-      if (isCRM && isVinSolutions) card.querySelector('.out-paste')!.addEventListener('click', function(this: HTMLElement) { const st = card.querySelector('.out-paste-status') as HTMLElement; (this as any).disabled = true; this.textContent = 'Pasting...'; pasteIntoCRM(content, st).then(() => { this.textContent = 'Paste to CRM'; (this as any).disabled = false; }); });
+      const isEmail = label === 'EMAIL' || label === 'EMAIL REPLY';
+
+      // FIX 1: Message/Email get "Copy + Log", CRM gets "Paste to CRM", Email on VIN gets "Paste to Email"
+      let actionBtns = '<button class="out-copy">Copy + Log</button>';
+      if (isCRM && isVinSolutions) actionBtns = '<button class="out-copy">Copy</button><button class="out-paste">Paste to CRM</button>';
+      if (isEmail && isVinSolutions) actionBtns = '<button class="out-copy">Copy + Log</button><button class="out-paste-email">Paste to Email</button>';
+
+      card.innerHTML = `<div class="out-label">${esc(label)}</div><div class="out-text">${esc(content).replace(/\n/g, '<br>')}</div><div class="out-actions">${actionBtns}</div>${(isCRM || isEmail) && isVinSolutions ? '<div class="out-paste-status"></div>' : ''}`;
+
+      // Copy + Log: copies to clipboard AND logs to generation_events via background
+      card.querySelector('.out-copy')!.addEventListener('click', function(this: HTMLElement) {
+        navigator.clipboard.writeText(content);
+        this.textContent = 'Copied'; this.style.background = '#16a34a'; this.style.color = '#fff';
+        // Fire-and-forget log
+        try { browser.runtime.sendMessage({ type: 'LOG_COPY', payload: { label, platform: PLATFORM, customer: leadData?.customerName || null } }); } catch(e) {}
+        setTimeout(() => { this.textContent = isCRM ? 'Copy' : 'Copy + Log'; this.style.background = ''; this.style.color = ''; }, 1500);
+      });
+
+      // Paste to CRM (CRM Note only)
+      if (isCRM && isVinSolutions) {
+        card.querySelector('.out-paste')!.addEventListener('click', function(this: HTMLElement) { const st = card.querySelector('.out-paste-status') as HTMLElement; (this as any).disabled = true; this.textContent = 'Pasting...'; pasteIntoCRM(content, st).then(() => { this.textContent = 'Paste to CRM'; (this as any).disabled = false; }); });
+      }
+
+      // FIX 2: Paste to Email (Email on VinSolutions)
+      if (isEmail && isVinSolutions) {
+        card.querySelector('.out-paste-email')!.addEventListener('click', function(this: HTMLElement) {
+          const st = card.querySelector('.out-paste-status') as HTMLElement;
+          (this as any).disabled = true; this.textContent = 'Pasting...';
+          pasteIntoEmail(content, st).then(() => { this.textContent = 'Paste to Email'; (this as any).disabled = false; });
+        });
+      }
+
       container.appendChild(card);
     }
 
@@ -619,7 +735,7 @@ export default defineContentScript({
       return `
 * { margin:0; padding:0; box-sizing:border-box; }
 :host { all:initial; font-family:system-ui,-apple-system,sans-serif; font-size:13px; color:#1a202c; }
-#o8 { width:${width}; height:100vh; background:#fff; border-left:1px solid #e2e8f0; overflow-y:auto; overscroll-behavior:contain; box-shadow:-4px 0 16px rgba(0,0,0,0.06); display:flex; flex-direction:column; }
+#o8 { width:${width}; height:100vh; background:#fff; border-left:1px solid #e2e8f0; border-right:1px solid #e2e8f0; overflow-y:auto; overscroll-behavior:contain; box-shadow:0 0 16px rgba(0,0,0,0.06); display:flex; flex-direction:column; }
 .header { padding:10px 14px; border-bottom:1px solid #e8eaed; display:flex; align-items:center; gap:8px; flex-shrink:0; }
 .logo { font-size:14px; font-weight:800; color:#7F77DD; letter-spacing:3px; }
 .badge { font-size:9px; font-weight:600; padding:2px 8px; border-radius:10px; text-transform:uppercase; letter-spacing:0.5px; flex:1; text-align:center; }
@@ -648,7 +764,7 @@ export default defineContentScript({
 .out-text { font-size:12px; line-height:1.5; max-height:180px; overflow-y:auto; }
 .out-actions { display:flex; gap:6px; margin-top:6px; }
 .out-copy { padding:4px 12px; background:#f0f2f5; border:1px solid #dde1e6; border-radius:4px; font-size:11px; font-weight:600; color:#475569; cursor:pointer; font-family:inherit; } .out-copy:hover { background:#e2e8f0; }
-.out-paste { padding:4px 12px; background:#2563eb; border:1px solid #1d4ed8; border-radius:4px; font-size:11px; font-weight:600; color:#fff; cursor:pointer; font-family:inherit; } .out-paste:hover { background:#1d4ed8; }
+.out-paste, .out-paste-email { padding:4px 12px; background:#2563eb; border:1px solid #1d4ed8; border-radius:4px; font-size:11px; font-weight:600; color:#fff; cursor:pointer; font-family:inherit; } .out-paste:hover, .out-paste-email:hover { background:#1d4ed8; }
 .out-paste-status { font-size:10px; margin-top:4px; min-height:14px; }
 .tools-panel { display:flex; flex-direction:column; flex:1; overflow:hidden; }
 .tools-header { padding:10px 14px; border-bottom:1px solid #e8eaed; display:flex; align-items:center; gap:8px; }
