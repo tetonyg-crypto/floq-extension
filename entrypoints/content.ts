@@ -1163,7 +1163,7 @@ export default defineContentScript({
       ${HTML_CONTEXT_TAB}
       ${HTML_VOICE_TAB}
       ${HTML_COMMAND_TAB}
-      <div class="sidebar-footer"><a id="o8-settings" class="settings-link" title="Profile Settings">&#9881; Settings</a></div>
+      <div class="sidebar-footer"><a id="o8-settings" class="settings-link" title="Profile Settings">&#9881; Settings</a><div class="tcpa-notice">Messages are for human review. You are responsible for TCPA compliance.</div></div>
     `;
 
     // ===== SHARED CONTEXT TAB HTML =====
@@ -1287,7 +1287,7 @@ export default defineContentScript({
       ${HTML_CONTEXT_TAB}
       ${HTML_VOICE_TAB}
       ${HTML_COMMAND_TAB}
-      <div class="sidebar-footer"><a id="o8-settings" class="settings-link" title="Profile Settings">&#9881; Settings</a></div>
+      <div class="sidebar-footer"><a id="o8-settings" class="settings-link" title="Profile Settings">&#9881; Settings</a><div class="tcpa-notice">Messages are for human review. You are responsible for TCPA compliance.</div></div>
     `;
 
     // ===== CSS =====
@@ -1378,6 +1378,7 @@ export default defineContentScript({
       .alert-dismiss { background:none; border:none; color:#94a3b8; cursor:pointer; font-size:14px; padding:0 4px; }
 
       .sidebar-footer { padding:8px 14px; border-top:1px solid #e8eaed; flex-shrink:0; text-align:center; }
+      .tcpa-notice { font-size:10px; color:#9CA3AF; margin-top:4px; line-height:1.3; }
       .settings-link { font-size:10px; color:#94a3b8; cursor:pointer; text-decoration:none; }
       .settings-link:hover { color:#6D28D9; }
 
