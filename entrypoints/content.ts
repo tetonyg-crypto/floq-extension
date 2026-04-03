@@ -1,19 +1,23 @@
 /**
- * Floq — Platform-Aware Content Script v1.5.1
- * Single injection per page. Platform detection controls UI, position, and features.
- * Runs on VinSolutions, Gmail, Facebook, LinkedIn, WhatsApp — never injects twice.
+ * Floq v1.6.0 — Clean UX Redesign
+ * Quick Mode (default): one screen, output chips, input+mic, generate, output.
+ * Tools Menu: Coach, Alerts, Context, Command — accessed via gear icon.
+ * Platform-aware: VinSolutions (left, 320px), Gmail (right, 300px, collapsed default),
+ *   Facebook (only /messages/), LinkedIn, WhatsApp.
  */
 
 import './content/styles.css';
 
-// ===== PLATFORM DETECTION (module-level) =====
 type Platform = 'vinsolutions' | 'gmail' | 'facebook' | 'linkedin' | 'whatsapp' | 'unknown';
 
 function detectPlatform(): Platform {
   const url = window.location.href;
   if (url.includes('vinsolutions') || url.includes('coxautoinc')) return 'vinsolutions';
   if (url.includes('mail.google.com')) return 'gmail';
-  if (url.includes('facebook.com') || url.includes('messenger.com')) return 'facebook';
+  // Facebook: only on /messages/ or messenger.com
+  if (url.includes('messenger.com')) return 'facebook';
+  if (url.includes('facebook.com/messages')) return 'facebook';
+  if (url.includes('facebook.com') && !url.includes('/messages')) return 'unknown'; // news feed = no inject
   if (url.includes('linkedin.com')) return 'linkedin';
   if (url.includes('web.whatsapp.com')) return 'whatsapp';
   return 'unknown';
@@ -26,7 +30,7 @@ export default defineContentScript({
     '*://*.vinsolutions.com/*',
     '*://vinsolutions.app.coxautoinc.com/*',
     '*://mail.google.com/*',
-    '*://*.facebook.com/*',
+    '*://www.facebook.com/messages/*',
     '*://www.messenger.com/*',
     '*://www.linkedin.com/*',
     '*://web.whatsapp.com/*'
@@ -35,7 +39,6 @@ export default defineContentScript({
   runAt: 'document_idle',
 
   main() {
-    // ===== FIX 1: Platform guard — unknown platforms get nothing =====
     if (PLATFORM === 'unknown') return;
 
     const isVinSolutions = PLATFORM === 'vinsolutions';
@@ -43,14 +46,13 @@ export default defineContentScript({
     const isFacebook = PLATFORM === 'facebook';
     const isLinkedIn = PLATFORM === 'linkedin';
 
-    function getOutputLabels(): { text: string; email: string; crm: string } {
+    function getOutputLabels() {
       if (isVinSolutions) return { text: 'TEXT MESSAGE', email: 'EMAIL', crm: 'CRM NOTE' };
       if (isGmail) return { text: 'REPLY', email: 'EMAIL REPLY', crm: 'NOTE' };
       if (isFacebook) return { text: 'MESSAGE REPLY', email: 'EMAIL', crm: 'NOTE' };
       if (isLinkedIn) return { text: 'LINKEDIN REPLY', email: 'EMAIL', crm: 'NOTE' };
       return { text: 'REPLY', email: 'EMAIL', crm: 'NOTE' };
     }
-
     const outputLabels = getOutputLabels();
 
     // ===== ADDNOTE POPUP RECEIVER (VinSolutions only) =====
@@ -81,28 +83,25 @@ export default defineContentScript({
     let sidebarOpen = false;
     let sidebarRoot: HTMLElement | null = null;
     let isGenerating = false;
+    let currentTier = 'floor';
 
-    // Feature gating helper — shows upgrade message in output area
-    async function checkFeatureGate(feature: string, outputEl: HTMLElement): Promise<boolean> {
+    // ===== TIER CHECK =====
+    async function getTier(): Promise<string> {
       try {
         const resp = await browser.runtime.sendMessage({ type: 'CHECK_FEATURES' });
-        const features = resp?.features || {};
-        if (features[feature]) return true;
-
-        if (feature === 'gm_dashboard') {
-          outputEl.innerHTML = '<div style="padding:14px;background:#F0EFFF;border:1px solid #7F77DD;border-radius:8px;margin:8px 14px;font-size:12px;line-height:1.6;color:#534AB7">Floor insights are available in Floq Command. Ask your GM to upgrade at floqsales.com</div>';
-        } else if (feature === 'voice_coach' || feature === 'command_mode') {
-          outputEl.innerHTML = '<div style="padding:14px;background:#F0EFFF;border:1px solid #7F77DD;border-radius:8px;margin:8px 14px;font-size:12px;line-height:1.6;color:#534AB7">This feature is available in Floq Command starting at $4,999/mo. Talk to your account manager.</div>';
-        } else if (feature === 'facebook' || feature === 'gmail' || feature === 'linkedin') {
-          outputEl.innerHTML = '<div style="padding:14px;background:#F0EFFF;border:1px solid #7F77DD;border-radius:8px;margin:8px 14px;font-size:12px;line-height:1.6;color:#534AB7">Cross-platform generation is available in Floq Command starting at $4,999/mo. Talk to your account manager.</div>';
-        } else if (feature === 'context_reply' || feature === 'voice_dictation') {
-          outputEl.innerHTML = '<div style="padding:14px;background:#F0EFFF;border:1px solid #7F77DD;border-radius:8px;margin:8px 14px;font-size:12px;line-height:1.6;color:#534AB7">This feature is available in Floq Command starting at $4,999/mo. Talk to your account manager.</div>';
-        }
-        return false;
-      } catch(e) { return true; } // Fail open so demo doesn't break
+        currentTier = resp?.tier || 'floor';
+        return currentTier;
+      } catch(e) { return 'floor'; }
     }
 
-    // ===== VINSOLUTIONS AUTO-SCAN (only runs on VinSolutions domains) =====
+    async function isFeatureUnlocked(feature: string): Promise<boolean> {
+      try {
+        const resp = await browser.runtime.sendMessage({ type: 'CHECK_FEATURES' });
+        return resp?.features?.[feature] || false;
+      } catch(e) { return true; } // fail open for demo
+    }
+
+    // ===== VINSOLUTIONS AUTO-SCAN =====
     const MAKES = 'Chevrolet|Chevy|Subaru|Toyota|Ford|Ram|Dodge|Jeep|GMC|Honda|Nissan|Hyundai|Kia|BMW|Mercedes|Buick|Cadillac|Lexus|Acura|Audi|Volvo|Mazda|Chrysler|Lincoln|Infiniti|Volkswagen|VW|Porsche|Tesla|Rivian';
     const STOP_WORDS = 'Created|Attempted|Contacted|Looking|Wants|Also|Stock|Source|Status|miles|General|Customer|Interested|Trade|lineup|options|inventory|Calculated|Equity|Payoff|hover|details|Bad|Sold|Active|Lost';
     const POISON_BEFORE = /(?:Equity|Payoff|Trade-in|trade\s+value|Credit)\b[\s\S]{0,50}$/i;
@@ -120,32 +119,17 @@ export default defineContentScript({
       if (vi) vehicle = vi[1].trim().replace(/\s+/g, ' ').slice(0, 50);
       if (!vehicle) {
         const activeMatch = text.match(new RegExp('Active\\t[\\s\\S]{0,80}?(20\\d{2}\\s+(?:' + MAKES + ')[^\\t\\n]*)', 'i'));
-        if (activeMatch) {
-          let v = activeMatch[1].trim().replace(/\s+/g, ' ');
-          v = v.replace(new RegExp('\\s+(?:' + STOP_WORDS + ')\\b.*', 'i'), '');
-          vehicle = v.slice(0, 50);
-        }
+        if (activeMatch) { let v = activeMatch[1].trim().replace(/\s+/g, ' '); v = v.replace(new RegExp('\\s+(?:' + STOP_WORDS + ')\\b.*', 'i'), ''); vehicle = v.slice(0, 50); }
       }
       if (!vehicle) {
         const allMatches = text.matchAll(new RegExp('(20\\d{2}\\s+(?:' + MAKES + ')(?:\\s+(?!(?:' + STOP_WORDS + ')\\b)[A-Za-z0-9./-]+){0,5})', 'gi'));
-        for (const m of allMatches) {
-          if (isPoisoned(text, m.index!, m[0].length)) continue;
-          vehicle = m[1].trim().replace(/\s+/g, ' ').slice(0, 50);
-          break;
-        }
+        for (const m of allMatches) { if (isPoisoned(text, m.index!, m[0].length)) continue; vehicle = m[1].trim().replace(/\s+/g, ' ').slice(0, 50); break; }
       }
       if (!vehicle) {
         const allMakes = text.matchAll(new RegExp('(20\\d{2}\\s+(?:' + MAKES + '))', 'gi'));
-        for (const m of allMakes) {
-          if (isPoisoned(text, m.index!, m[0].length)) continue;
-          vehicle = m[1].trim().slice(0, 40);
-          break;
-        }
+        for (const m of allMakes) { if (isPoisoned(text, m.index!, m[0].length)) continue; vehicle = m[1].trim().slice(0, 40); break; }
       }
-      if (!vehicle) {
-        const sv = text.match(/(?:Stock\s*#|Vehicle)\s*:?\s*[\s\S]{0,30}?(20\d{2}\s+\w+\s+[\w-]+)/i);
-        if (sv) vehicle = sv[1].trim().slice(0, 50);
-      }
+      if (!vehicle) { const sv = text.match(/(?:Stock\s*#|Vehicle)\s*:?\s*[\s\S]{0,30}?(20\d{2}\s+\w+\s+[\w-]+)/i); if (sv) vehicle = sv[1].trim().slice(0, 50); }
       if (vehicle) vehicle = vehicle.replace(/[.,;:!]+$/, '').trim();
       return vehicle;
     }
@@ -155,22 +139,12 @@ export default defineContentScript({
       const dm = text.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/);
       if (dm) name = dm[1].trim();
       if (!name) { const im = text.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/); if (im) name = im[1].trim(); }
-      let phone = '';
-      const pm = text.match(/[CHW]:\s*\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
-      if (pm) phone = pm[0].replace(/^[CHW]:\s*/, '');
-      let email = '';
-      const em = text.match(/[\w.-]+@[\w.-]+\.\w{2,}/);
-      if (em) email = em[0];
+      let phone = ''; const pm = text.match(/[CHW]:\s*\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/); if (pm) phone = pm[0].replace(/^[CHW]:\s*/, '');
+      let email = ''; const em = text.match(/[\w.-]+@[\w.-]+\.\w{2,}/); if (em) email = em[0];
       const vehicle = extractVehicle(text);
-      let source = '';
-      const sm = text.match(/Source:\s*(.+)/i);
-      if (sm) source = sm[1].trim().split('\n')[0].slice(0, 50);
-      let status = '';
-      const stm = text.match(/Status:\s*(.+)/i);
-      if (stm) status = stm[1].trim().split('\n')[0].slice(0, 30);
-      let lastContact = '';
-      const cm = text.match(/Attempted:\s*(.+)/i) || text.match(/Contacted:\s*(.+)/i) || text.match(/Created:\s*(.+)/i);
-      if (cm) lastContact = cm[1].trim().split('\n')[0].slice(0, 30);
+      let source = ''; const sm = text.match(/Source:\s*(.+)/i); if (sm) source = sm[1].trim().split('\n')[0].slice(0, 50);
+      let status = ''; const stm = text.match(/Status:\s*(.+)/i); if (stm) status = stm[1].trim().split('\n')[0].slice(0, 30);
+      let lastContact = ''; const cm = text.match(/Attempted:\s*(.+)/i) || text.match(/Contacted:\s*(.+)/i) || text.match(/Created:\s*(.+)/i); if (cm) lastContact = cm[1].trim().split('\n')[0].slice(0, 30);
       return { customerName: name, phone, email, vehicle, source, status, lastContact };
     }
 
@@ -178,32 +152,25 @@ export default defineContentScript({
     const bodyText = document.body?.innerText || '';
     const isUIFrame = bodyText.length > 2000 || !isVinSolutions;
 
-    // ===== VINSOLUTIONS AUTO-SCAN (conditional) =====
     if (isVinSolutions) {
       function attemptScan() {
         const t = document.body?.innerText || '';
         if (t.length < 50) return;
         const s = scanText(t);
-        if (s.customerName) {
-          browser.storage.local.set({ oper8er_lead: s, oper8er_lead_time: Date.now() });
-        }
+        if (s.customerName) browser.storage.local.set({ oper8er_lead: s, oper8er_lead_time: Date.now() });
         const v = extractVehicle(t);
-        if (v) {
-          browser.storage.local.set({ oper8er_vehicle_info: v, oper8er_vehicle_info_time: Date.now() });
-        }
+        if (v) browser.storage.local.set({ oper8er_vehicle_info: v, oper8er_vehicle_info_time: Date.now() });
       }
       attemptScan();
       let lastScannedName = '';
       setInterval(() => {
         const t = document.body?.innerText || '';
-        const nm = t.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) ||
-                   t.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
+        const nm = t.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || t.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
         const curName = nm ? nm[1].trim() : '';
         if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
       }, 2000);
     }
 
-    // ===== VEHICLE MERGE + SIDEBAR UPDATE (VinSolutions) =====
     if (isVinSolutions && isUIFrame) {
       setInterval(async () => {
         try {
@@ -222,29 +189,28 @@ export default defineContentScript({
       }, 2000);
     }
 
-    // On non-VinSolutions pages with iframes: only inject pill in the TOP frame
     if (!isVinSolutions && window !== window.top) return;
-    // On VinSolutions: skip tiny utility iframes
     if (isVinSolutions && bodyText.length < 500) return;
 
-    // ===== FIX 2: Single injection guard — bail if sidebar already exists =====
+    // ===== INJECTION GUARDS =====
     if (document.getElementById('floq-sidebar')) return;
     if (document.getElementById('oper8er-pill')) return;
     if (document.getElementById('oper8er-host')) return;
 
-    // ===== PILL BUTTON (UNIVERSAL) =====
+    // ===== PILL BUTTON =====
     const pill = document.createElement('div');
     pill.id = 'oper8er-pill';
-    pill.textContent = '⚡ FQ';
 
-    // FIX 3: Platform-specific pill position
+    // Gmail: collapsed by default, pill is the expand trigger
+    const gmailCollapsed = isGmail;
     const pillSide = isVinSolutions ? 'left' : 'right';
+    pill.textContent = '⚡ FQ';
     Object.assign(pill.style, {
       position:'fixed', [pillSide]:'0', top:'50%', transform:'translateY(-50%)', zIndex:'2147483646',
       background:'#7F77DD', color:'#fff', padding:'6px 8px 6px 6px',
       borderRadius: isVinSolutions ? '0 6px 6px 0' : '6px 0 0 6px',
       fontSize:'11px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'pointer',
-      boxShadow:'0 2px 8px rgba(37,99,235,0.25)', letterSpacing:'0.5px', opacity:'0.85',
+      boxShadow:'0 2px 8px rgba(127,119,221,0.25)', letterSpacing:'0.5px', opacity:'0.85',
       transition:'opacity 0.15s, padding 0.15s'
     });
     pill.onmouseenter = () => { pill.style.opacity = '1'; pill.style.padding = '8px 12px 8px 10px'; pill.textContent = '⚡ Floq'; };
@@ -252,122 +218,84 @@ export default defineContentScript({
     pill.onclick = () => { sidebarOpen ? closeSidebar() : openSidebar(); };
     document.body.appendChild(pill);
 
-    // ===== FIX 4: Platform badge config =====
-    function getPlatformBadge(): { label: string; color: string; bg: string } {
-      switch (PLATFORM) {
-        case 'vinsolutions': return { label: 'VinSolutions', color: '#7F77DD', bg: '#F0EFFF' };
-        case 'gmail': return { label: 'Gmail', color: '#dc2626', bg: '#fef2f2' };
-        case 'facebook': return { label: 'Facebook', color: '#1877f2', bg: '#eff6ff' };
-        case 'linkedin': return { label: 'LinkedIn', color: '#0a66c2', bg: '#eff6ff' };
-        case 'whatsapp': return { label: 'WhatsApp', color: '#25D366', bg: '#f0fdf4' };
-        default: return { label: PLATFORM, color: '#64748b', bg: '#f1f5f9' };
-      }
+    // ===== INLINE MIC HELPER =====
+    function attachInlineMic(shadow: ShadowRoot, inputEl: HTMLTextAreaElement | HTMLInputElement, micBtn: HTMLElement) {
+      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (!SR) { micBtn.style.display = 'none'; return; }
+      let active = false;
+      let recog: any = null;
+      micBtn.onclick = () => {
+        if (active) {
+          active = false;
+          if (recog) { recog.onend = null; try { recog.stop(); } catch(e) {} recog = null; }
+          micBtn.classList.remove('mic-active');
+          return;
+        }
+        try {
+          recog = new SR();
+          recog.continuous = true; recog.interimResults = true; recog.lang = 'en-US';
+          let finalText = '';
+          recog.onresult = (e: any) => {
+            let interim = '';
+            for (let i = e.resultIndex; i < e.results.length; i++) {
+              if (e.results[i].isFinal) finalText += e.results[i][0].transcript + ' ';
+              else interim += e.results[i][0].transcript;
+            }
+            inputEl.value = finalText + interim;
+            inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+          };
+          recog.onerror = () => { active = false; micBtn.classList.remove('mic-active'); showToast(shadow, 'Voice not available — type your message'); };
+          recog.onend = () => { if (active) { active = false; micBtn.classList.remove('mic-active'); } };
+          recog.start();
+          active = true;
+          micBtn.classList.add('mic-active');
+          // Auto-stop after 10s silence
+          setTimeout(() => { if (active) { active = false; micBtn.classList.remove('mic-active'); if (recog) { try { recog.stop(); } catch(e) {} recog = null; } } }, 10000);
+        } catch(e) { micBtn.style.display = 'none'; showToast(shadow, 'Voice not available — type your message'); }
+      };
     }
 
-    // ===== FIX 7: Tab list — hide Context and Voice on VinSolutions =====
-    function getTabBarHTML(): string {
-      let tabs = `
-        <button class="tab-btn active" data-tab="generate">✨ Generate</button>
-        <button class="tab-btn" data-tab="coach">⚡ Coach</button>
-        <button class="tab-btn" data-tab="alerts">🔔 Alerts</button>`;
-      // Context and Voice only on non-VinSolutions platforms (Command tier, not ready for primary platform)
-      if (!isVinSolutions) {
-        tabs += `
-        <button class="tab-btn" data-tab="context">📸 Context</button>
-        <button class="tab-btn" data-tab="voice">🎤 Voice</button>`;
-      }
-      tabs += `
-        <button class="tab-btn" data-tab="command">⚡ Command</button>`;
-      return tabs;
+    function showToast(shadow: ShadowRoot, msg: string) {
+      const existing = shadow.getElementById('floq-toast');
+      if (existing) existing.remove();
+      const toast = document.createElement('div');
+      toast.id = 'floq-toast';
+      toast.textContent = msg;
+      Object.assign(toast.style, { position:'fixed', bottom:'16px', left:'50%', transform:'translateX(-50%)', background:'#1a202c', color:'#fff', padding:'8px 16px', borderRadius:'6px', fontSize:'11px', fontWeight:'500', zIndex:'99', opacity:'1', transition:'opacity 0.3s' });
+      shadow.getElementById('o8')?.appendChild(toast);
+      setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 2500);
     }
 
     // ===== SIDEBAR =====
     async function openSidebar() {
-      // Onboarding gate
       try {
         const check = await browser.storage.sync.get(['profile_onboarded']);
-        if (!check.profile_onboarded) {
-          browser.runtime.sendMessage({ type: 'OPEN_ONBOARDING' });
-          return;
-        }
+        if (!check.profile_onboarded) { browser.runtime.sendMessage({ type: 'OPEN_ONBOARDING' }); return; }
       } catch(e) {}
 
-      if (sidebarRoot) { sidebarRoot.style.display = 'block'; sidebarOpen = true; return; }
+      if (sidebarRoot) { sidebarRoot.style.display = 'block'; sidebarOpen = true; if (pill) pill.style.display = 'none'; return; }
+      if (document.getElementById('oper8er-host')) return;
 
-      // FIX 2: Prevent double sidebar
-      if (document.getElementById('oper8er-host')) { return; }
+      await getTier();
 
       const host = document.createElement('div');
       host.id = 'oper8er-host';
-
-      // FIX 3: Platform-specific position
-      const sidebarWidth = isVinSolutions ? '320px' : '300px';
+      const sidebarWidth = isGmail ? '300px' : '320px';
       const sidebarSide = isVinSolutions ? 'left' : 'right';
-      Object.assign(host.style, {
-        position:'fixed', top:'0', [sidebarSide]:'0',
-        width: sidebarWidth, height:'100vh', zIndex:'2147483647'
-      });
+      Object.assign(host.style, { position:'fixed', top:'0', [sidebarSide]:'0', width: sidebarWidth, height:'100vh', zIndex:'2147483647' });
 
       const shadow = host.attachShadow({ mode: 'open' });
       const style = document.createElement('style');
-      style.textContent = getCSS(sidebarSide);
+      style.textContent = getCSS(sidebarSide, sidebarWidth);
       shadow.appendChild(style);
 
       const container = document.createElement('div');
       container.id = 'o8';
-      container.innerHTML = isVinSolutions ? getHTML_VinSolutions() : getHTML_Universal();
+      container.innerHTML = getHTML();
       shadow.appendChild(container);
 
-      // FIX 5: VinSolutions specific placement — try DOM injection, fall back to fixed
-      if (isVinSolutions) {
-        let injected = false;
-        const tryInjectIntoDOM = () => {
-          // Look for VinSolutions left panel containers
-          const targets = [
-            document.querySelector('#left-panel'),
-            document.querySelector('.left-panel'),
-            document.querySelector('[id*="LeftPanel"]'),
-            document.querySelector('[class*="left-panel"]'),
-            document.querySelector('[id*="leadList"]'),
-            document.querySelector('[class*="lead-list"]'),
-            document.querySelector('#mainContent'),
-            document.querySelector('.workspace')
-          ];
-          for (const target of targets) {
-            if (target && target.offsetWidth > 0) {
-              // Make position relative for sidebar to flow in layout
-              host.style.position = 'relative';
-              host.style.height = '100%';
-              host.style.flexShrink = '0';
-              target.insertBefore(host, target.firstChild);
-              injected = true;
-              return true;
-            }
-          }
-          return false;
-        };
+      document.body.appendChild(host);
 
-        if (!tryInjectIntoDOM()) {
-          // Watch for the panel to appear (max 5 seconds)
-          const observer = new MutationObserver(() => {
-            if (tryInjectIntoDOM()) observer.disconnect();
-          });
-          observer.observe(document.body, { childList: true, subtree: true });
-          setTimeout(() => {
-            observer.disconnect();
-            if (!injected) {
-              // Fall back to fixed position on the left
-              document.body.appendChild(host);
-            }
-          }, 5000);
-          // Append immediately as fixed while waiting
-          if (!injected) document.body.appendChild(host);
-        }
-      } else {
-        document.body.appendChild(host);
-      }
-
-      // Mark injection complete
       const marker = document.createElement('div');
       marker.id = 'floq-sidebar';
       marker.style.display = 'none';
@@ -375,470 +303,177 @@ export default defineContentScript({
 
       sidebarRoot = host;
       sidebarOpen = true;
+      if (pill) pill.style.display = 'none';
+
+      // Gmail: push email content left
+      if (isGmail) {
+        const gmailMain = document.querySelector('.nH') as HTMLElement;
+        if (gmailMain) gmailMain.style.marginRight = sidebarWidth;
+      }
 
       const s = shadow;
+
+      // Close button
       s.getElementById('o8-close')!.onclick = closeSidebar;
+
+      // Collapse button (Gmail)
+      const collapseBtn = s.getElementById('o8-collapse');
+      if (collapseBtn) {
+        collapseBtn.onclick = () => closeSidebar();
+      }
+
+      // Output type chips
+      s.querySelectorAll('.chip').forEach(c => { c.addEventListener('click', () => c.classList.toggle('on')); });
+
+      // Generate button
       s.getElementById('o8-generate')!.onclick = () => doGenerate(s);
 
-      s.querySelectorAll('.chip').forEach(c => {
-        c.addEventListener('click', () => c.classList.toggle('on'));
-      });
+      // Enter to generate
+      const mainInput = s.getElementById('o8-input') as HTMLTextAreaElement;
+      mainInput.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doGenerate(s); } });
 
-      // Settings link
+      // Inline mic on main input
+      const mainMic = s.getElementById('o8-mic')!;
+      attachInlineMic(s, mainInput, mainMic);
+
+      // Settings
       const settingsLink = s.getElementById('o8-settings');
-      if (settingsLink) {
-        settingsLink.addEventListener('click', () => {
-          browser.runtime.openOptionsPage();
-        });
+      if (settingsLink) settingsLink.addEventListener('click', () => browser.runtime.openOptionsPage());
+
+      // ===== TOOLS MENU =====
+      const toolsBtn = s.getElementById('o8-tools-btn');
+      const toolsPanel = s.getElementById('o8-tools-panel');
+      const toolsBack = s.getElementById('o8-tools-back');
+
+      if (toolsBtn && toolsPanel) {
+        toolsBtn.onclick = () => {
+          s.getElementById('o8-quick')!.style.display = 'none';
+          toolsPanel.style.display = 'flex';
+        };
+      }
+      if (toolsBack) {
+        toolsBack.onclick = () => {
+          toolsPanel!.style.display = 'none';
+          s.getElementById('o8-quick')!.style.display = 'flex';
+        };
       }
 
-      // Voice input on Generate tab
-      let voiceActive = false;
-      let recognition: any = null;
-      s.getElementById('o8-mic')!.onclick = () => {
-        if (voiceActive) {
-          voiceActive = false;
-          if (recognition) { recognition.onend = null; try { recognition.stop(); } catch(e) {} recognition = null; }
-          const mic = s.getElementById('o8-mic')!;
-          mic.style.borderColor = '#e2e8f0'; mic.style.background = '#f8fafc';
-          return;
-        }
-        const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        if (SR) {
-          try {
-            recognition = new SR();
-            recognition.continuous = true; recognition.interimResults = true; recognition.lang = 'en-US';
-            let finalText = '';
-            recognition.onresult = (e: any) => {
-              let interim = '';
-              for (let i = e.resultIndex; i < e.results.length; i++) {
-                if (e.results[i].isFinal) finalText += e.results[i][0].transcript + ' ';
-                else interim += e.results[i][0].transcript;
-              }
-              (s.getElementById('o8-input') as HTMLTextAreaElement).value = finalText + interim;
-            };
-            recognition.onerror = (e: any) => {
-              if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-                voiceActive = false;
-                const mic = s.getElementById('o8-mic')!;
-                mic.style.borderColor = '#e2e8f0'; mic.style.background = '#f8fafc';
-                openVoicePopup(s);
-              }
-            };
-            recognition.onend = () => { if (voiceActive) try { recognition.start(); } catch(e) {} };
-            recognition.start(); voiceActive = true;
-            const mic = s.getElementById('o8-mic')!;
-            mic.style.borderColor = '#dc2626'; mic.style.background = '#fef2f2';
-            return;
-          } catch(e) {}
-        }
-        openVoicePopup(s);
-      };
-
-      function openVoicePopup(shadow: ShadowRoot) {
-        const voiceUrl = browser.runtime.getURL('voice.html');
-        window.open(voiceUrl, 'oper8er_voice', 'width=380,height=300,top=200,left=200');
-        const poll = setInterval(async () => {
-          try {
-            const r = await browser.storage.local.get(['oper8er_voice', 'oper8er_voice_time']);
-            if (r.oper8er_voice && r.oper8er_voice_time > Date.now() - 30000) {
-              (shadow.getElementById('o8-input') as HTMLTextAreaElement).value = r.oper8er_voice;
-              await browser.storage.local.remove(['oper8er_voice', 'oper8er_voice_time']);
-              clearInterval(poll);
-            }
-          } catch(e) {}
-        }, 500);
-        setTimeout(() => clearInterval(poll), 60000);
-      }
-
-      s.getElementById('o8-input')!.addEventListener('keydown', (e: any) => {
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doGenerate(s); }
-      });
-
-      // ===== TAB SWITCHING =====
-      s.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          const tab = (btn as HTMLElement).dataset.tab!;
-
-          // Feature gate: coach and command require Floq Command tier
-          if (tab === 'coach') {
-            const outputEl = s.getElementById('o8-coach-output');
-            if (outputEl && !(await checkFeatureGate('voice_coach', outputEl))) {
-              s.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-              s.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-              btn.classList.add('active');
-              s.getElementById('tab-coach')?.classList.add('active');
-              return;
-            }
-          }
-          if (tab === 'command') {
-            const outputEl = s.getElementById('o8-cmd-output') || s.getElementById('tab-command');
-            if (outputEl && !(await checkFeatureGate('command_mode', outputEl))) {
-              s.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-              s.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-              btn.classList.add('active');
-              s.getElementById('tab-command')?.classList.add('active');
-              return;
-            }
-          }
-
-          // Feature gate: context and voice tabs require Command+ tier
-          if (tab === 'context') {
-            const outputEl = s.getElementById('o8-ctx-output');
-            if (outputEl && !(await checkFeatureGate('context_reply', outputEl))) {
-              s.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-              s.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-              btn.classList.add('active');
-              s.getElementById('tab-context')?.classList.add('active');
-              return;
-            }
-          }
-          if (tab === 'voice') {
-            const outputEl = s.getElementById('o8-voice-output');
-            if (outputEl && !(await checkFeatureGate('voice_dictation', outputEl))) {
-              s.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-              s.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-              btn.classList.add('active');
-              s.getElementById('tab-voice')?.classList.add('active');
-              return;
-            }
-          }
-
-          s.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-          s.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      // Tool tabs within tools panel
+      s.querySelectorAll('.tool-tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const tab = (btn as HTMLElement).dataset.tool!;
+          s.querySelectorAll('.tool-tab-btn').forEach(b => b.classList.remove('active'));
+          s.querySelectorAll('.tool-content').forEach(c => (c as HTMLElement).style.display = 'none');
           btn.classList.add('active');
-          s.getElementById('tab-' + tab)?.classList.add('active');
-          if (tab === 'alerts') loadAlerts(s);
+          const panel = s.getElementById('tool-' + tab);
+          if (panel) panel.style.display = 'block';
         });
       });
 
-      // ===== CONTEXT TAB — Screenshot drop + paste (only on non-VinSolutions) =====
-      if (!isVinSolutions) {
-        let contextImage: string | null = null;
-        const dropZone = s.getElementById('o8-ctx-dropzone');
-        const ctxPreview = s.getElementById('o8-ctx-preview');
-        const ctxImg = s.getElementById('o8-ctx-img') as HTMLImageElement;
-        const ctxDirection = s.getElementById('o8-ctx-direction') as HTMLTextAreaElement;
-        const ctxGenBtn = s.getElementById('o8-ctx-generate') as HTMLButtonElement;
-        const ctxOutput = s.getElementById('o8-ctx-output');
+      // Coach — with tier gate
+      const coachInput = s.getElementById('o8-coach-input') as HTMLTextAreaElement;
+      const coachMic = s.getElementById('o8-coach-mic');
+      if (coachInput && coachMic) attachInlineMic(s, coachInput, coachMic);
 
-        function setContextImage(dataUrl: string) {
-          contextImage = dataUrl;
-          if (ctxImg) ctxImg.src = dataUrl;
-          if (ctxPreview) ctxPreview.style.display = 'block';
-          if (dropZone) dropZone.style.display = 'none';
-          updateCtxBtn();
-        }
-        function clearContextImage() {
-          contextImage = null;
-          if (ctxPreview) ctxPreview.style.display = 'none';
-          if (dropZone) dropZone.style.display = 'flex';
-          updateCtxBtn();
-        }
-        function updateCtxBtn() {
-          if (ctxGenBtn) ctxGenBtn.disabled = !contextImage || !ctxDirection?.value.trim();
-        }
-
-        if (dropZone) {
-          dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
-          dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('dragover'); });
-          dropZone.addEventListener('drop', (e: any) => {
-            e.preventDefault(); dropZone.classList.remove('dragover');
-            const file = e.dataTransfer?.files?.[0];
-            if (file?.type.startsWith('image/')) {
-              const reader = new FileReader();
-              reader.onload = () => setContextImage(reader.result as string);
-              reader.readAsDataURL(file);
-            }
-          });
-        }
-        document.addEventListener('paste', (e: any) => {
-          if (!s.getElementById('tab-context')?.classList.contains('active')) return;
-          const item = e.clipboardData?.items?.[0];
-          if (item?.type.startsWith('image/')) {
-            const blob = item.getAsFile();
-            if (blob) {
-              const reader = new FileReader();
-              reader.onload = () => setContextImage(reader.result as string);
-              reader.readAsDataURL(blob);
-            }
-          }
-        });
-        if (s.getElementById('o8-ctx-remove')) {
-          s.getElementById('o8-ctx-remove')!.addEventListener('click', clearContextImage);
-        }
-        if (ctxDirection) ctxDirection.addEventListener('input', updateCtxBtn);
-
-        if (ctxGenBtn) {
-          ctxGenBtn.addEventListener('click', async () => {
-            if (!contextImage || !ctxDirection?.value.trim()) return;
-            ctxGenBtn.textContent = 'Analyzing...'; ctxGenBtn.disabled = true; ctxGenBtn.style.background = '#94a3b8';
-            if (ctxOutput) ctxOutput.innerHTML = '';
-            try {
-              const resp = await browser.runtime.sendMessage({
-                type: 'CONTEXT_REPLY',
-                payload: { image: contextImage, direction: ctxDirection.value.trim() }
-              });
-              if (resp.error) {
-                addOutput(s, 'Error', resp.error, 'o8-ctx-output');
-              } else {
-                if (resp.platform) addOutput(s, 'PLATFORM', resp.platform, 'o8-ctx-output');
-                if (resp.customer_intent) addOutput(s, 'CUSTOMER INTENT', resp.customer_intent, 'o8-ctx-output');
-                addOutput(s, 'REPLY', resp.reply || resp.raw || '', 'o8-ctx-output');
-              }
-            } catch(e: any) {
-              addOutput(s, 'Error', e.message, 'o8-ctx-output');
-            }
-            ctxGenBtn.textContent = '📸 Generate Reply'; ctxGenBtn.disabled = false; ctxGenBtn.style.background = '#7F77DD';
-            updateCtxBtn();
-          });
-        }
-
-        // ===== VOICE TAB — Push-to-talk (only on non-VinSolutions) =====
-        let voiceTabRecognition: any = null;
-        let voiceTabActive = false;
-        const voiceMic = s.getElementById('o8-voice-mic');
-        const voiceLabel = s.getElementById('o8-voice-label');
-        const voiceTranscript = s.getElementById('o8-voice-transcript');
-        const voiceGenBtn = s.getElementById('o8-voice-generate') as HTMLButtonElement;
-        const voiceOutput = s.getElementById('o8-voice-output');
-
-        function startVoiceCapture() {
-          const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-          if (!SR) { if (voiceLabel) voiceLabel.textContent = 'Voice not supported in this browser'; return; }
-          voiceTabRecognition = new SR();
-          voiceTabRecognition.continuous = false;
-          voiceTabRecognition.interimResults = true;
-          voiceTabRecognition.lang = 'en-US';
-          voiceTabActive = true;
-          if (voiceMic) voiceMic.classList.add('active');
-          if (voiceLabel) voiceLabel.textContent = 'Listening...';
-          if (voiceTranscript) { voiceTranscript.style.display = 'block'; voiceTranscript.textContent = ''; }
-
-          voiceTabRecognition.onresult = (e: any) => {
-            const transcript = Array.from(e.results).map((r: any) => r[0].transcript).join('');
-            if (voiceTranscript) voiceTranscript.textContent = transcript;
-          };
-          voiceTabRecognition.onend = () => {
-            voiceTabActive = false;
-            if (voiceMic) voiceMic.classList.remove('active');
-            if (voiceLabel) voiceLabel.textContent = 'Tap to talk again';
-            if (voiceTranscript?.textContent?.trim()) {
-              if (voiceGenBtn) voiceGenBtn.style.display = 'block';
-            }
-          };
-          voiceTabRecognition.onerror = () => {
-            voiceTabActive = false;
-            if (voiceMic) voiceMic.classList.remove('active');
-            if (voiceLabel) voiceLabel.textContent = 'Hold to talk';
-          };
-          voiceTabRecognition.start();
-        }
-
-        if (voiceMic) {
-          voiceMic.addEventListener('mousedown', startVoiceCapture);
-          voiceMic.addEventListener('mouseup', () => { if (voiceTabRecognition && voiceTabActive) voiceTabRecognition.stop(); });
-          voiceMic.addEventListener('touchstart', (e) => { e.preventDefault(); startVoiceCapture(); });
-          voiceMic.addEventListener('touchend', () => { if (voiceTabRecognition && voiceTabActive) voiceTabRecognition.stop(); });
-        }
-
-        if (voiceGenBtn) {
-          voiceGenBtn.addEventListener('click', async () => {
-            const transcript = voiceTranscript?.textContent?.trim();
-            if (!transcript) return;
-            voiceGenBtn.textContent = 'Generating...'; voiceGenBtn.disabled = true; voiceGenBtn.style.background = '#94a3b8';
-            if (voiceOutput) voiceOutput.innerHTML = '';
-            try {
-              const resp = await browser.runtime.sendMessage({
-                type: 'VOICE_REPLY',
-                payload: { transcription: transcript }
-              });
-              if (resp.error) {
-                addOutput(s, 'Error', resp.error, 'o8-voice-output');
-              } else {
-                const sec = resp.sections;
-                if (sec?.text) addOutput(s, 'TEXT', sec.text, 'o8-voice-output');
-                if (sec?.email) addOutput(s, 'EMAIL', sec.email, 'o8-voice-output');
-                if (sec?.crm) addOutput(s, 'CRM NOTE', sec.crm, 'o8-voice-output');
-                if (!sec?.text && !sec?.email && !sec?.crm) addOutput(s, 'OUTPUT', resp.text || '', 'o8-voice-output');
-              }
-            } catch(e: any) {
-              addOutput(s, 'Error', e.message, 'o8-voice-output');
-            }
-            voiceGenBtn.textContent = '✨ Generate Reply'; voiceGenBtn.disabled = false; voiceGenBtn.style.background = '#7F77DD';
-          });
-        }
-      } // end if (!isVinSolutions) — context/voice tab setup
-
-      // ===== COACH CHIPS =====
       s.querySelectorAll('.coach-chip').forEach(chip => {
-        chip.addEventListener('click', () => {
-          const ta = s.getElementById('o8-coach-input') as HTMLTextAreaElement;
-          if (ta) ta.value = chip.textContent || '';
-        });
+        chip.addEventListener('click', () => { if (coachInput) coachInput.value = chip.textContent || ''; });
       });
 
-      // ===== COACH BUTTON =====
       const coachBtn = s.getElementById('o8-coach-btn');
       if (coachBtn) {
         coachBtn.addEventListener('click', async () => {
-          const input = (s.getElementById('o8-coach-input') as HTMLTextAreaElement)?.value.trim();
+          if (currentTier === 'floor') return; // gated
+          const input = coachInput?.value.trim();
           if (!input) return;
           coachBtn.textContent = 'Thinking...'; (coachBtn as any).disabled = true; coachBtn.style.background = '#94a3b8';
           try {
-            const resp = await browser.runtime.sendMessage({
-              type: 'COACH_ME',
-              payload: { situation: input, vehicleContext: leadData?.vehicle || '' }
-            });
+            const resp = await browser.runtime.sendMessage({ type: 'COACH_ME', payload: { situation: input, vehicleContext: leadData?.vehicle || '' } });
             const output = s.getElementById('o8-coach-output')!;
-            if (resp.error) {
-              output.innerHTML = '<div class="coach-direction"><div class="coach-label">ERROR</div><div class="coach-text">' + esc(resp.error) + '</div></div>';
-            } else {
-              output.innerHTML = '<div class="coach-direction"><div class="coach-label">YOUR NEXT MOVE:</div><div class="coach-text">' + esc(resp.coaching).replace(/\n/g, '<br>') + '</div></div>';
-            }
-          } catch(e: any) {
-            s.getElementById('o8-coach-output')!.innerHTML = '<div class="coach-direction"><div class="coach-label">ERROR</div><div class="coach-text">' + esc(e.message) + '</div></div>';
-          }
-          coachBtn.textContent = '⚡ Coach Me'; (coachBtn as any).disabled = false; coachBtn.style.background = '#7F77DD';
+            if (resp.error) { output.innerHTML = '<div class="tool-result">' + esc(resp.error) + '</div>'; }
+            else { output.innerHTML = '<div class="tool-result"><strong>YOUR NEXT MOVE:</strong><br>' + esc(resp.coaching).replace(/\n/g, '<br>') + '</div>'; }
+          } catch(e: any) { s.getElementById('o8-coach-output')!.innerHTML = '<div class="tool-result">' + esc(e.message) + '</div>'; }
+          coachBtn.textContent = 'Coach Me'; (coachBtn as any).disabled = false; coachBtn.style.background = '#7F77DD';
         });
       }
 
-      // ===== ALERT BUTTON =====
+      // Alerts
+      const alertInput = s.getElementById('o8-alert-input') as HTMLInputElement;
+      const alertMic = s.getElementById('o8-alert-mic');
+      if (alertInput && alertMic) attachInlineMic(s, alertInput, alertMic);
+
       const alertBtn = s.getElementById('o8-alert-btn');
       if (alertBtn) {
         alertBtn.addEventListener('click', async () => {
-          const input = (s.getElementById('o8-alert-input') as HTMLInputElement)?.value.trim();
+          const input = alertInput?.value.trim();
           if (!input) return;
-          const alertTime = parseAlertTime(input);
-          await browser.runtime.sendMessage({ type: 'SET_ALERT', payload: { task: input, alertTime } });
-          (s.getElementById('o8-alert-input') as HTMLInputElement).value = '';
+          await browser.runtime.sendMessage({ type: 'SET_ALERT', payload: { task: input, alertTime: parseAlertTime(input) } });
+          alertInput.value = '';
           loadAlerts(s);
         });
       }
 
-      // ===== COMMAND MODE SETUP =====
-      let cmdUsedVoice = false;
-
-      s.querySelectorAll('.cmd-chip').forEach(chip => {
-        chip.addEventListener('click', () => {
-          const ta = s.getElementById('o8-cmd-input') as HTMLTextAreaElement;
-          const prefix = (chip as HTMLElement).dataset.prefix || '';
-          if (ta) { ta.value = prefix + ta.value; ta.focus(); }
-        });
-      });
-
+      // Command
+      const cmdInput = s.getElementById('o8-cmd-input') as HTMLTextAreaElement;
       const cmdMic = s.getElementById('o8-cmd-mic');
-      let cmdRecognition: any = null;
-      if (cmdMic) {
-        const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        cmdMic.addEventListener('mousedown', () => {
-          if (!SR) {
-            (s.getElementById('o8-cmd-mic-label') as HTMLElement).textContent = 'Voice not supported — type your command below';
-            return;
-          }
-          cmdUsedVoice = true;
-          cmdRecognition = new SR();
-          cmdRecognition.continuous = true;
-          cmdRecognition.interimResults = true;
-          cmdRecognition.lang = 'en-US';
-          let finalText = '';
-          const transcriptEl = s.getElementById('o8-cmd-transcript')!;
-          transcriptEl.style.display = 'block';
-          cmdMic.classList.add('recording');
-          (s.getElementById('o8-cmd-mic-label') as HTMLElement).textContent = 'Listening...';
+      if (cmdInput && cmdMic) attachInlineMic(s, cmdInput, cmdMic);
 
-          cmdRecognition.onresult = (e: any) => {
-            let interim = '';
-            for (let i = e.resultIndex; i < e.results.length; i++) {
-              if (e.results[i].isFinal) finalText += e.results[i][0].transcript + ' ';
-              else interim += e.results[i][0].transcript;
-            }
-            transcriptEl.textContent = finalText + interim;
-          };
-          cmdRecognition.onerror = () => {};
-          try { cmdRecognition.start(); } catch(e) {}
-        });
-
-        const stopRecording = () => {
-          if (cmdRecognition) {
-            try { cmdRecognition.stop(); } catch(e) {}
-            const transcriptEl = s.getElementById('o8-cmd-transcript')!;
-            const ta = s.getElementById('o8-cmd-input') as HTMLTextAreaElement;
-            if (transcriptEl.textContent && ta) ta.value = transcriptEl.textContent.trim();
-            cmdMic.classList.remove('recording');
-            (s.getElementById('o8-cmd-mic-label') as HTMLElement).textContent = 'Hold to speak your command';
-            cmdRecognition = null;
-          }
-        };
-        cmdMic.addEventListener('mouseup', stopRecording);
-        cmdMic.addEventListener('mouseleave', stopRecording);
-      }
-
-      // Execute Command button
       const cmdExec = s.getElementById('o8-cmd-execute');
       if (cmdExec) {
         cmdExec.addEventListener('click', async () => {
-          const input = (s.getElementById('o8-cmd-input') as HTMLTextAreaElement)?.value.trim();
+          const input = cmdInput?.value.trim();
           if (!input) return;
-
-          cmdExec.textContent = '⚡ Processing...'; (cmdExec as any).disabled = true; cmdExec.style.opacity = '0.6';
+          cmdExec.textContent = 'Processing...'; (cmdExec as any).disabled = true;
           const statusArea = s.getElementById('o8-cmd-status')!;
           statusArea.innerHTML = '';
-
           try {
-            const resp = await browser.runtime.sendMessage({
-              type: 'EXECUTE_COMMAND',
-              payload: { command: input, currentUrl: window.location.href, vehicleContext: leadData?.vehicle || '' }
-            });
-
-            if (resp.error) {
-              statusArea.innerHTML = `<div class="cmd-result error"><div class="cmd-result-label">ERROR</div><div class="cmd-result-text">${esc(resp.error)}</div><div class="cmd-result-actions"><button class="cmd-retry">Try again</button></div></div>`;
-              statusArea.querySelector('.cmd-retry')?.addEventListener('click', () => { statusArea.innerHTML = ''; cmdExec.click(); });
-            } else {
+            const resp = await browser.runtime.sendMessage({ type: 'EXECUTE_COMMAND', payload: { command: input, currentUrl: window.location.href, vehicleContext: leadData?.vehicle || '' } });
+            if (resp.error) { statusArea.innerHTML = '<div class="tool-result" style="color:#FF3B30">' + esc(resp.error) + '</div>'; }
+            else {
               const p = resp.parsed;
-              const actionLabel = p.action?.replace(/_/g, ' ') || 'command';
-              const recipientLabel = p.recipient ? ` for ${p.recipient}` : '';
-              let confirmText = '';
-
-              if (p.action === 'set_reminder' && p.metadata?.reminder_time) {
-                await browser.runtime.sendMessage({ type: 'SET_ALERT', payload: { task: input, alertTime: new Date(p.metadata.reminder_time).getTime() } });
-                const timeStr = new Date(p.metadata.reminder_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-                confirmText = `Reminder set for ${timeStr}`;
-              } else if (p.content) {
-                const injected = injectContent(p);
-                confirmText = injected
-                  ? `${actionLabel}${recipientLabel} — injected`
-                  : `${actionLabel}${recipientLabel} — copy below`;
-                if (!injected) {
-                  statusArea.innerHTML += `<div class="out-card"><div class="out-label">GENERATED — COPY AND SEND</div><div class="out-text">${esc(p.content).replace(/\n/g, '<br>')}</div><div class="out-actions"><button class="out-copy">Copy</button></div></div>`;
-                  statusArea.querySelector('.out-copy')?.addEventListener('click', function(this: HTMLElement) {
-                    navigator.clipboard.writeText(p.content);
-                    this.textContent = '✓ Copied'; this.style.background = '#16a34a'; this.style.color = '#fff';
-                    setTimeout(() => { this.textContent = 'Copy'; this.style.background = ''; this.style.color = ''; }, 1500);
-                  });
-                }
-              } else {
-                confirmText = `Command processed${recipientLabel}`;
-              }
-
-              const successDiv = document.createElement('div');
-              successDiv.className = 'cmd-result success';
-              successDiv.innerHTML = `<div class="cmd-result-label">✓ SUCCESS</div><div class="cmd-result-text">${esc(confirmText)}</div>`;
-              statusArea.prepend(successDiv);
-              setTimeout(() => successDiv.remove(), 4000);
-
-              if (cmdUsedVoice && confirmText && window.speechSynthesis) {
-                const u = new SpeechSynthesisUtterance(confirmText);
-                u.rate = 1.1; u.pitch = 1.0;
-                window.speechSynthesis.speak(u);
-              }
-              cmdUsedVoice = false;
+              if (p.content) { const injected = injectContent(p); statusArea.innerHTML = '<div class="tool-result">' + (injected ? 'Injected' : esc(p.content).replace(/\n/g, '<br>')) + '</div>'; }
+              else { statusArea.innerHTML = '<div class="tool-result">Command processed</div>'; }
             }
-          } catch(e: any) {
-            statusArea.innerHTML = `<div class="cmd-result error"><div class="cmd-result-label">ERROR</div><div class="cmd-result-text">${esc(e.message)}</div></div>`;
-          }
+          } catch(e: any) { statusArea.innerHTML = '<div class="tool-result" style="color:#FF3B30">' + esc(e.message) + '</div>'; }
+          cmdExec.textContent = 'Execute'; (cmdExec as any).disabled = false;
+        });
+      }
 
-          cmdExec.textContent = '⚡ Execute Command'; (cmdExec as any).disabled = false; cmdExec.style.opacity = '1';
+      // Context (screenshot)
+      let contextImage: string | null = null;
+      const dropZone = s.getElementById('o8-ctx-dropzone');
+      const ctxPreview = s.getElementById('o8-ctx-preview');
+      const ctxImg = s.getElementById('o8-ctx-img') as HTMLImageElement;
+      const ctxDirection = s.getElementById('o8-ctx-direction') as HTMLTextAreaElement;
+      const ctxGenBtn = s.getElementById('o8-ctx-generate') as HTMLButtonElement;
+      const ctxOutput = s.getElementById('o8-ctx-output');
+
+      function updateCtxBtn() { if (ctxGenBtn) ctxGenBtn.disabled = !contextImage || !ctxDirection?.value.trim(); }
+
+      if (dropZone) {
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e: any) => {
+          e.preventDefault(); dropZone.classList.remove('dragover');
+          const file = e.dataTransfer?.files?.[0];
+          if (file?.type.startsWith('image/')) { const reader = new FileReader(); reader.onload = () => { contextImage = reader.result as string; if (ctxImg) ctxImg.src = contextImage; if (ctxPreview) ctxPreview.style.display = 'block'; if (dropZone) dropZone.style.display = 'none'; updateCtxBtn(); }; reader.readAsDataURL(file); }
+        });
+      }
+      if (s.getElementById('o8-ctx-remove')) {
+        s.getElementById('o8-ctx-remove')!.addEventListener('click', () => { contextImage = null; if (ctxPreview) ctxPreview.style.display = 'none'; if (dropZone) dropZone.style.display = 'flex'; updateCtxBtn(); });
+      }
+      if (ctxDirection) ctxDirection.addEventListener('input', updateCtxBtn);
+      if (ctxGenBtn) {
+        ctxGenBtn.addEventListener('click', async () => {
+          if (!contextImage || !ctxDirection?.value.trim()) return;
+          ctxGenBtn.textContent = 'Analyzing...'; ctxGenBtn.disabled = true;
+          if (ctxOutput) ctxOutput.innerHTML = '';
+          try {
+            const resp = await browser.runtime.sendMessage({ type: 'CONTEXT_REPLY', payload: { image: contextImage, direction: ctxDirection.value.trim() } });
+            if (resp.error) { addOutput(s, 'Error', resp.error, 'o8-ctx-output'); }
+            else { addOutput(s, 'REPLY', resp.reply || resp.raw || '', 'o8-ctx-output'); }
+          } catch(e: any) { addOutput(s, 'Error', e.message, 'o8-ctx-output'); }
+          ctxGenBtn.textContent = 'Generate Reply'; ctxGenBtn.disabled = false;
+          updateCtxBtn();
         });
       }
 
@@ -847,30 +482,24 @@ export default defineContentScript({
 
     function closeSidebar() {
       if (sidebarRoot) { sidebarRoot.style.display = 'none'; sidebarOpen = false; }
+      if (pill) pill.style.display = 'block';
+      if (isGmail) { const gmailMain = document.querySelector('.nH') as HTMLElement; if (gmailMain) gmailMain.style.marginRight = '0'; }
     }
 
     function updateSidebar() {
       if (!sidebarRoot || !isVinSolutions) return;
       const s = sidebarRoot.shadowRoot!;
-      const empty = s.getElementById('o8-empty');
       const card = s.getElementById('o8-card');
-      if (!empty || !card) return;
-
+      if (!card) return;
       if (leadData?.customerName) {
-        empty.style.display = 'none';
         card.style.display = 'block';
         s.getElementById('o8-name')!.textContent = leadData.customerName;
         s.getElementById('o8-vehicle')!.textContent = leadData.vehicle || 'No vehicle detected';
         let meta = '';
         if (leadData.phone) meta += leadData.phone;
         if (leadData.source) meta += (meta ? ' · ' : '') + leadData.source;
-        if (leadData.status) meta += (meta ? ' · ' : '') + leadData.status;
         s.getElementById('o8-meta')!.textContent = meta;
-        s.getElementById('o8-last')!.textContent = leadData.lastContact ? `Last: ${leadData.lastContact}` : '';
-        s.getElementById('o8-ctx')!.textContent = `✓ Context loaded — ${leadData.customerName}`;
-        s.getElementById('o8-ctx')!.style.display = 'block';
       } else {
-        empty.style.display = 'flex';
         card.style.display = 'none';
       }
     }
@@ -880,11 +509,13 @@ export default defineContentScript({
       if (isGenerating) return;
       isGenerating = true;
 
-      // Platform feature gate: Gmail/Facebook/LinkedIn require Floq Command
       if (isGmail || isFacebook || isLinkedIn) {
         const featureKey = isGmail ? 'gmail' : isFacebook ? 'facebook' : 'linkedin';
-        const outputEl = s.getElementById('o8-outputs');
-        if (outputEl && !(await checkFeatureGate(featureKey, outputEl))) { isGenerating = false; return; }
+        if (!(await isFeatureUnlocked(featureKey))) {
+          const out = s.getElementById('o8-outputs');
+          if (out) out.innerHTML = '<div class="gate-card">Cross-platform generation is available in Floq Command ($4,999/mo). Contact yancy@yenes.ai</div>';
+          isGenerating = false; return;
+        }
       }
 
       const input = (s.getElementById('o8-input') as HTMLTextAreaElement).value.trim();
@@ -895,7 +526,6 @@ export default defineContentScript({
       if (selected.length === 0) { isGenerating = false; return; }
 
       const type = selected.length === 3 ? 'all' : selected.length === 1 ? selected[0]! : 'all';
-
       const btn = s.getElementById('o8-generate') as HTMLButtonElement;
       btn.textContent = 'Generating...'; btn.disabled = true; btn.style.background = '#94a3b8';
       s.getElementById('o8-outputs')!.innerHTML = '';
@@ -903,122 +533,51 @@ export default defineContentScript({
       try {
         const response = await browser.runtime.sendMessage({
           type: 'GENERATE_OUTPUT',
-          payload: {
-            type,
-            leadContext: leadData || {},
-            repInput: input,
-            repName: '',
-            dealership: '',
-            platform: PLATFORM,
-            metadata: {
-              workflow_type: type === 'all' ? 'all' : type,
-              customer_name: leadData?.customerName || null,
-              vehicle: leadData?.vehicle || null
-            }
-          }
+          payload: { type, leadContext: leadData || {}, repInput: input, repName: '', dealership: '', platform: PLATFORM,
+            metadata: { workflow_type: type === 'all' ? 'all' : type, customer_name: leadData?.customerName || null, vehicle: leadData?.vehicle || null } }
         });
-
-        if (response.error) {
-          addOutput(s, 'Error', response.error);
-        } else {
+        if (response.error) { addOutput(s, 'Error', response.error); }
+        else {
           const sec = response.sections;
           if (selected.includes('text') && sec.text) addOutput(s, outputLabels.text, sec.text);
           if (selected.includes('email') && sec.email) addOutput(s, outputLabels.email, sec.email);
           if (selected.includes('crm') && sec.crm) addOutput(s, outputLabels.crm, sec.crm);
-          if (!sec.text && !sec.email && !sec.crm) {
-            addOutput(s, 'OUTPUT', response.text || 'Generation returned empty — try rephrasing your input or check that a customer is loaded.');
-          }
+          if (!sec.text && !sec.email && !sec.crm) addOutput(s, 'OUTPUT', response.text || 'Generation returned empty.');
         }
-      } catch (e: any) {
-        addOutput(s, 'Error', e.message);
-      }
+      } catch (e: any) { addOutput(s, 'Error', e.message); }
 
-      btn.textContent = '✨ Generate'; btn.disabled = false; btn.style.background = '#7F77DD';
+      btn.textContent = 'Generate'; btn.disabled = false; btn.style.background = '#7F77DD';
       isGenerating = false;
     }
 
-    // ===== PASTE TO CRM (VinSolutions only) =====
+    // ===== CRM PASTE (VinSolutions) =====
     function findNoteTextarea(): HTMLTextAreaElement | null {
       if (!isVinSolutions) return null;
       const iframes = document.querySelectorAll('iframe');
-      for (const iframe of iframes) {
-        try {
-          if (iframe.src?.includes('AddNote')) {
-            const doc = iframe.contentDocument || (iframe as any).contentWindow?.document;
-            if (doc) { const ta = doc.querySelector('textarea'); if (ta) return ta; }
-          }
-        } catch(e) {}
-      }
-      for (const iframe of iframes) {
-        try {
-          const doc = iframe.contentDocument || (iframe as any).contentWindow?.document;
-          if (!doc) continue;
-          const text = doc.body?.innerText || '';
-          if (text.includes('Add Note') || text.includes('Note Type')) {
-            const ta = doc.querySelector('textarea'); if (ta) return ta;
-          }
-        } catch(e) {}
-      }
+      for (const iframe of iframes) { try { if (iframe.src?.includes('AddNote')) { const doc = iframe.contentDocument || (iframe as any).contentWindow?.document; if (doc) { const ta = doc.querySelector('textarea'); if (ta) return ta; } } } catch(e) {} }
+      for (const iframe of iframes) { try { const doc = iframe.contentDocument || (iframe as any).contentWindow?.document; if (!doc) continue; const text = doc.body?.innerText || ''; if (text.includes('Add Note') || text.includes('Note Type')) { const ta = doc.querySelector('textarea'); if (ta) return ta; } } catch(e) {} }
       return null;
     }
-
     function clickNoteIcon(): boolean {
       if (!isVinSolutions) return false;
-      const allElements = document.querySelectorAll('a, button, div, span, td');
-      for (const el of allElements) {
-        if (el.textContent?.trim() === 'Note' && (el as HTMLElement).offsetWidth > 0) {
-          (el as HTMLElement).click(); return true;
-        }
-      }
+      for (const el of document.querySelectorAll('a, button, div, span, td')) { if (el.textContent?.trim() === 'Note' && (el as HTMLElement).offsetWidth > 0) { (el as HTMLElement).click(); return true; } }
       const iframes = document.querySelectorAll('iframe');
-      for (const iframe of iframes) {
-        try {
-          const doc = iframe.contentDocument || (iframe as any).contentWindow?.document;
-          if (!doc) continue;
-          for (const el of doc.querySelectorAll('a, button, div, span, td, img')) {
-            const text = el.textContent?.trim();
-            if ((text === 'Note' || (el as HTMLImageElement).alt === 'Note') && (el as HTMLElement).offsetWidth > 0) {
-              (el as HTMLElement).click(); return true;
-            }
-          }
-        } catch(e) {}
-      }
+      for (const iframe of iframes) { try { const doc = iframe.contentDocument || (iframe as any).contentWindow?.document; if (!doc) continue; for (const el of doc.querySelectorAll('a, button, div, span, td, img')) { const text = el.textContent?.trim(); if ((text === 'Note' || (el as HTMLImageElement).alt === 'Note') && (el as HTMLElement).offsetWidth > 0) { (el as HTMLElement).click(); return true; } } } catch(e) {} }
       return false;
     }
-
     async function pasteIntoCRM(noteText: string, statusEl: HTMLElement) {
-      if (!isVinSolutions) {
-        statusEl.textContent = 'Paste to CRM only works on VinSolutions.';
-        statusEl.style.color = '#94a3b8';
-        return;
-      }
+      if (!isVinSolutions) { statusEl.textContent = 'Paste to CRM only works on VinSolutions.'; return; }
       statusEl.textContent = 'Opening note form...'; statusEl.style.color = '#2563eb';
       await browser.storage.local.set({ oper8er_paste_note: noteText, oper8er_paste_note_time: Date.now() });
       let textarea = findNoteTextarea();
-      if (!textarea) {
-        const clicked = clickNoteIcon();
-        if (clicked) {
-          for (let attempt = 0; attempt < 15; attempt++) {
-            await new Promise(r => setTimeout(r, 500));
-            textarea = findNoteTextarea(); if (textarea) break;
-          }
-        }
-      }
+      if (!textarea) { const clicked = clickNoteIcon(); if (clicked) { for (let attempt = 0; attempt < 15; attempt++) { await new Promise(r => setTimeout(r, 500)); textarea = findNoteTextarea(); if (textarea) break; } } }
       if (textarea) {
         textarea.focus(); textarea.value = noteText;
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        textarea.dispatchEvent(new Event('change', { bubbles: true }));
-        textarea.dispatchEvent(new Event('blur', { bubbles: true }));
-        statusEl.textContent = '✓ Pasted to CRM. Click Save in VinSolutions.';
-        statusEl.style.color = '#16a34a'; statusEl.style.fontWeight = '600';
-        const origBorder = textarea.style.border;
-        textarea.style.border = '2px solid #16a34a';
-        setTimeout(() => { textarea!.style.border = origBorder; }, 2000);
+        textarea.dispatchEvent(new Event('input', { bubbles: true })); textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        statusEl.textContent = 'Pasted to CRM'; statusEl.style.color = '#16a34a';
+        textarea.style.border = '2px solid #16a34a'; setTimeout(() => { textarea!.style.border = ''; }, 2000);
         browser.storage.local.remove(['oper8er_paste_note', 'oper8er_paste_note_time']);
-      } else {
-        statusEl.textContent = '✓ Note staged. It will auto-paste when the Add Note form loads.';
-        statusEl.style.color = '#2563eb'; statusEl.style.fontWeight = '500';
-      }
+      } else { statusEl.textContent = 'Note staged — will auto-paste when form loads'; statusEl.style.color = '#2563eb'; }
     }
 
     function addOutput(s: ShadowRoot, label: string, content: string, containerId: string = 'o8-outputs') {
@@ -1026,112 +585,56 @@ export default defineContentScript({
       const card = document.createElement('div');
       card.className = 'out-card';
       const isCRM = label === 'CRM NOTE';
-      card.innerHTML = `
-        <div class="out-label">${esc(label)}</div>
-        <div class="out-text">${esc(content).replace(/\n/g, '<br>')}</div>
-        <div class="out-actions">
-          <button class="out-copy">Copy</button>
-          ${isCRM && isVinSolutions ? '<button class="out-paste">Paste to CRM</button>' : ''}
-        </div>
-        ${isCRM && isVinSolutions ? '<div class="out-paste-status"></div>' : ''}
-      `;
-      card.querySelector('.out-copy')!.addEventListener('click', function(this: HTMLElement) {
-        navigator.clipboard.writeText(content);
-        this.textContent = '✓ Copied'; this.style.background = '#16a34a'; this.style.color = '#fff';
-        setTimeout(() => { this.textContent = 'Copy'; this.style.background = ''; this.style.color = ''; }, 1500);
-      });
+      card.innerHTML = `<div class="out-label">${esc(label)}</div><div class="out-text">${esc(content).replace(/\n/g, '<br>')}</div><div class="out-actions"><button class="out-copy">Copy</button>${isCRM && isVinSolutions ? '<button class="out-paste">Paste to CRM</button>' : ''}</div>${isCRM && isVinSolutions ? '<div class="out-paste-status"></div>' : ''}`;
+      card.querySelector('.out-copy')!.addEventListener('click', function(this: HTMLElement) { navigator.clipboard.writeText(content); this.textContent = 'Copied'; this.style.background = '#16a34a'; this.style.color = '#fff'; setTimeout(() => { this.textContent = 'Copy'; this.style.background = ''; this.style.color = ''; }, 1500); });
       if (isCRM && isVinSolutions) {
-        card.querySelector('.out-paste')!.addEventListener('click', function(this: HTMLElement) {
-          const statusEl = card.querySelector('.out-paste-status') as HTMLElement;
-          (this as any).disabled = true; this.textContent = 'Pasting...'; this.style.background = '#94a3b8';
-          pasteIntoCRM(content, statusEl).then(() => {
-            this.textContent = 'Paste to CRM'; (this as any).disabled = false; this.style.background = '';
-          });
-        });
+        card.querySelector('.out-paste')!.addEventListener('click', function(this: HTMLElement) { const statusEl = card.querySelector('.out-paste-status') as HTMLElement; (this as any).disabled = true; this.textContent = 'Pasting...'; pasteIntoCRM(content, statusEl).then(() => { this.textContent = 'Paste to CRM'; (this as any).disabled = false; }); });
       }
       container.appendChild(card);
     }
 
-    // ===== PLATFORM INJECTION =====
     function injectContent(parsed: any): boolean {
       const { action, content, subject } = parsed;
-
-      if ((action === 'write_email' || PLATFORM === 'gmail') && isGmail) {
-        const body = document.querySelector('div[aria-label="Message Body"][contenteditable="true"]') as HTMLElement;
-        if (body) {
-          body.focus();
-          document.execCommand('insertText', false, content);
-          if (subject) {
-            const subj = document.querySelector('input[name="subjectbox"]') as HTMLInputElement;
-            if (subj) { subj.focus(); subj.value = subject; subj.dispatchEvent(new Event('input', { bubbles: true })); }
-          }
-          return true;
-        }
-      }
-
-      if ((action === 'write_facebook_message' || PLATFORM === 'facebook') && isFacebook) {
-        const box = document.querySelector('div[role="textbox"][contenteditable="true"]') as HTMLElement;
-        if (box) { box.focus(); document.execCommand('insertText', false, content); return true; }
-      }
-
-      if ((action === 'write_linkedin_message' || PLATFORM === 'linkedin') && isLinkedIn) {
-        const box = document.querySelector('div[role="textbox"][contenteditable="true"]') as HTMLElement;
-        if (box) { box.focus(); document.execCommand('insertText', false, content); return true; }
-      }
-
-      if ((action === 'log_crm_note') && isVinSolutions) {
-        const statusEl = document.createElement('span');
-        pasteIntoCRM(content, statusEl);
-        return true;
-      }
-
+      if ((action === 'write_email' || PLATFORM === 'gmail') && isGmail) { const body = document.querySelector('div[aria-label="Message Body"][contenteditable="true"]') as HTMLElement; if (body) { body.focus(); document.execCommand('insertText', false, content); if (subject) { const subj = document.querySelector('input[name="subjectbox"]') as HTMLInputElement; if (subj) { subj.focus(); subj.value = subject; subj.dispatchEvent(new Event('input', { bubbles: true })); } } return true; } }
+      if ((action === 'write_facebook_message' || PLATFORM === 'facebook') && isFacebook) { const box = document.querySelector('div[role="textbox"][contenteditable="true"]') as HTMLElement; if (box) { box.focus(); document.execCommand('insertText', false, content); return true; } }
+      if ((action === 'write_linkedin_message' || PLATFORM === 'linkedin') && isLinkedIn) { const box = document.querySelector('div[role="textbox"][contenteditable="true"]') as HTMLElement; if (box) { box.focus(); document.execCommand('insertText', false, content); return true; } }
+      if (action === 'log_crm_note' && isVinSolutions) { const statusEl = document.createElement('span'); pasteIntoCRM(content, statusEl); return true; }
       return false;
     }
 
-    // ===== OPEN COMMAND TAB LISTENER (for Alt+K shortcut) =====
+    // ===== LISTENERS =====
     browser.runtime.onMessage.addListener((msg: any) => {
-      if (msg.type === 'OPEN_COMMAND_TAB') {
-        if (!sidebarOpen) {
-          openSidebar().then(() => {
-            if (sidebarRoot) {
-              const s = sidebarRoot.shadowRoot!;
-              s.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-              s.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-              s.querySelector('.tab-btn[data-tab="command"]')?.classList.add('active');
-              s.getElementById('tab-command')?.classList.add('active');
-            }
-          });
-        } else if (sidebarRoot) {
-          const s = sidebarRoot.shadowRoot!;
-          s.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-          s.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-          s.querySelector('.tab-btn[data-tab="command"]')?.classList.add('active');
-          s.getElementById('tab-command')?.classList.add('active');
-        }
+      if (msg.type === 'OPEN_COMMAND_TAB' && sidebarRoot) {
+        if (!sidebarOpen) openSidebar();
+        // Switch to tools > command
+        const s = sidebarRoot.shadowRoot!;
+        s.getElementById('o8-quick')!.style.display = 'none';
+        const tp = s.getElementById('o8-tools-panel');
+        if (tp) tp.style.display = 'flex';
+        s.querySelectorAll('.tool-tab-btn').forEach(b => b.classList.remove('active'));
+        s.querySelector('.tool-tab-btn[data-tool="command"]')?.classList.add('active');
+        s.querySelectorAll('.tool-content').forEach(c => (c as HTMLElement).style.display = 'none');
+        s.getElementById('tool-command')!.style.display = 'block';
+      }
+      if (msg.type === 'SHOW_ALERT_BANNER') {
+        const existing = document.getElementById('floq-alert-banner');
+        if (existing) existing.remove();
+        const banner = document.createElement('div');
+        banner.id = 'floq-alert-banner';
+        Object.assign(banner.style, { position:'fixed', top:'0', left:'0', right:'0', zIndex:'999999', background:'#FF3B30', color:'#fff', padding:'12px 20px', fontFamily:'system-ui,sans-serif', fontSize:'14px', fontWeight:'600', display:'flex', alignItems:'center', gap:'10px', boxShadow:'0 2px 8px rgba(0,0,0,0.2)' });
+        banner.innerHTML = `<span>🔔</span><span style="flex:1">${esc(msg.payload.task)}</span><button style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:6px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Dismiss</button>`;
+        banner.querySelector('button')!.addEventListener('click', () => { banner.remove(); browser.runtime.sendMessage({ type: 'DISMISS_ALERT', payload: { id: msg.payload.id } }); });
+        document.body.appendChild(banner);
+        try { const ac = new AudioContext(); const g = ac.createGain(); g.gain.value = 0.3; g.connect(ac.destination); const o1 = ac.createOscillator(); o1.frequency.value = 800; o1.connect(g); o1.start(); o1.stop(ac.currentTime + 0.15); } catch(e) {}
       }
     });
 
-    // ===== ALERT HELPERS =====
     function parseAlertTime(text: string): number {
       const now = Date.now();
-      const inMin = text.match(/in\s+(\d+)\s*min/i);
-      if (inMin) return now + parseInt(inMin[1]) * 60000;
-      const inHr = text.match(/in\s+(\d+)\s*hour/i);
-      if (inHr) return now + parseInt(inHr[1]) * 3600000;
+      const inMin = text.match(/in\s+(\d+)\s*min/i); if (inMin) return now + parseInt(inMin[1]) * 60000;
+      const inHr = text.match(/in\s+(\d+)\s*hour/i); if (inHr) return now + parseInt(inHr[1]) * 3600000;
       const byTime = text.match(/(?:by|at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
-      if (byTime) {
-        let h = parseInt(byTime[1]);
-        const m = byTime[2] ? parseInt(byTime[2]) : 0;
-        const ampm = (byTime[3] || '').toLowerCase();
-        if (ampm === 'pm' && h < 12) h += 12;
-        if (ampm === 'am' && h === 12) h = 0;
-        if (!ampm && h < 7) h += 12;
-        const d = new Date(); d.setHours(h, m, 0, 0);
-        if (d.getTime() < now) d.setDate(d.getDate() + 1);
-        return d.getTime();
-      }
-      const noonMatch = text.match(/\bnoon\b/i);
-      if (noonMatch) { const d = new Date(); d.setHours(12, 0, 0, 0); if (d.getTime() < now) d.setDate(d.getDate() + 1); return d.getTime(); }
+      if (byTime) { let h = parseInt(byTime[1]); const m = byTime[2] ? parseInt(byTime[2]) : 0; const ampm = (byTime[3] || '').toLowerCase(); if (ampm === 'pm' && h < 12) h += 12; if (ampm === 'am' && h === 12) h = 0; if (!ampm && h < 7) h += 12; const d = new Date(); d.setHours(h, m, 0, 0); if (d.getTime() < now) d.setDate(d.getDate() + 1); return d.getTime(); }
       return now + 30 * 60000;
     }
 
@@ -1139,376 +642,221 @@ export default defineContentScript({
       const alerts = await browser.runtime.sendMessage({ type: 'GET_ALERTS' });
       const list = s.getElementById('o8-alert-list');
       if (!list) return;
-      if (!alerts || alerts.length === 0) {
-        list.innerHTML = '<div style="text-align:center;color:#94a3b8;font-size:12px;padding:16px">No active reminders</div>';
-        return;
-      }
-      list.innerHTML = alerts.map((a: any) => {
-        const time = new Date(a.alertTime);
-        const timeStr = time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-        return `<div class="alert-item" data-id="${a.id}"><span class="alert-task">${esc(a.task)}</span><span class="alert-time">${timeStr}</span><button class="alert-dismiss" title="Dismiss">&times;</button></div>`;
-      }).join('');
-      list.querySelectorAll('.alert-dismiss').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          const id = (btn.closest('.alert-item') as HTMLElement)?.dataset.id;
-          if (id) { await browser.runtime.sendMessage({ type: 'DISMISS_ALERT', payload: { id } }); loadAlerts(s); }
-        });
-      });
+      if (!alerts || alerts.length === 0) { list.innerHTML = '<div style="text-align:center;color:#94a3b8;font-size:12px;padding:12px">No active reminders</div>'; return; }
+      list.innerHTML = alerts.map((a: any) => { const time = new Date(a.alertTime); const timeStr = time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); return `<div class="alert-item"><span>${esc(a.task)}</span><span class="alert-time">${timeStr}</span><button class="alert-dismiss" data-id="${a.id}">&times;</button></div>`; }).join('');
+      list.querySelectorAll('.alert-dismiss').forEach(btn => { btn.addEventListener('click', async () => { const id = (btn as HTMLElement).dataset.id; if (id) { await browser.runtime.sendMessage({ type: 'DISMISS_ALERT', payload: { id } }); loadAlerts(s); } }); });
     }
-
-    // ===== ALERT BANNER LISTENER =====
-    browser.runtime.onMessage.addListener((msg: any) => {
-      if (msg.type === 'SHOW_ALERT_BANNER') {
-        const existing = document.getElementById('floq-alert-banner');
-        if (existing) existing.remove();
-        const banner = document.createElement('div');
-        banner.id = 'floq-alert-banner';
-        Object.assign(banner.style, {
-          position: 'fixed', top: '0', left: '0', right: '0', zIndex: '999999',
-          background: '#FF3B30', color: '#fff', padding: '12px 20px',
-          fontFamily: 'system-ui, sans-serif', fontSize: '14px', fontWeight: '600',
-          display: 'flex', alignItems: 'center', gap: '10px',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
-        });
-        banner.innerHTML = `<span style="font-size:18px">🔔</span><span style="flex:1">${esc(msg.payload.task)}</span><button style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:6px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">Dismiss</button>`;
-        banner.querySelector('button')!.addEventListener('click', () => {
-          banner.remove();
-          browser.runtime.sendMessage({ type: 'DISMISS_ALERT', payload: { id: msg.payload.id } });
-        });
-        document.body.appendChild(banner);
-        try {
-          const ac = new AudioContext();
-          const g = ac.createGain(); g.gain.value = 0.3; g.connect(ac.destination);
-          const o1 = ac.createOscillator(); o1.frequency.value = 800; o1.connect(g); o1.start(); o1.stop(ac.currentTime + 0.15);
-          setTimeout(() => { const o2 = ac.createOscillator(); o2.frequency.value = 1000; o2.connect(g); o2.start(); o2.stop(ac.currentTime + 0.2); }, 180);
-        } catch(e) {}
-      }
-    });
 
     function esc(s: string) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-    // ===== HTML TEMPLATES =====
-
-    // Shared tab HTML fragments
-    const HTML_CONTEXT_TAB = `
-      <div id="tab-context" class="tab-content">
-        <div class="input-section">
-          <div id="o8-ctx-dropzone" class="ctx-dropzone">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7F77DD" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-            <span>Drop a screenshot or paste (Ctrl+V)</span>
-          </div>
-          <div id="o8-ctx-preview" class="ctx-preview" style="display:none">
-            <img id="o8-ctx-img" class="ctx-img" />
-            <button id="o8-ctx-remove" class="ctx-remove">&times;</button>
-          </div>
-          <textarea id="o8-ctx-direction" class="input" placeholder="What do you want to say? e.g. tell her yes it's available, ask when she can come in" rows="2"></textarea>
-          <button id="o8-ctx-generate" class="gen-btn" disabled>📸 Generate Reply</button>
-        </div>
-        <div id="o8-ctx-output" class="outputs"></div>
-      </div>
-    `;
-
-    const HTML_VOICE_TAB = `
-      <div id="tab-voice" class="tab-content">
-        <div class="voice-section">
-          <button id="o8-voice-mic" class="voice-mic">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-          </button>
-          <div id="o8-voice-label" class="voice-label">Hold to talk</div>
-          <div id="o8-voice-transcript" class="voice-transcript" contenteditable="true" style="display:none"></div>
-          <button id="o8-voice-generate" class="gen-btn" style="display:none">✨ Generate Reply</button>
-        </div>
-        <div id="o8-voice-output" class="outputs"></div>
-      </div>
-    `;
-
-    const HTML_COMMAND_TAB = `
-      <div id="tab-command" class="tab-content">
-        <div class="cmd-section">
-          <div class="cmd-mic-wrap">
-            <button id="o8-cmd-mic" class="cmd-mic" title="Hold to speak">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-            </button>
-            <div id="o8-cmd-mic-label" class="cmd-mic-label">Hold to speak your command</div>
-          </div>
-          <div id="o8-cmd-transcript" class="cmd-transcript" style="display:none"></div>
-          <textarea id="o8-cmd-input" class="input cmd-input" placeholder="Or type a command...&#10;Example: Write an email to Yancy that Wyatt has not made his calls today" rows="3"></textarea>
-          <div class="cmd-chips">
-            <button class="cmd-chip" data-prefix="Write email ">Write email</button>
-            <button class="cmd-chip" data-prefix="Write text ">Write text</button>
-            <button class="cmd-chip" data-prefix="Facebook message ">Facebook message</button>
-            <button class="cmd-chip" data-prefix="Log CRM note ">Log CRM note</button>
-            <button class="cmd-chip" data-prefix="Set reminder ">Set reminder</button>
-          </div>
-          <button id="o8-cmd-execute" class="gen-btn cmd-execute">⚡ Execute Command</button>
-          <div class="cmd-hint">Floq will generate and inject the output</div>
-        </div>
-        <div id="o8-cmd-status" class="cmd-status-area"></div>
-      </div>
-    `;
-
-    // ===== HTML: VINSOLUTIONS (auto-scan + customer card) =====
-    function getHTML_VinSolutions(): string {
-      const badge = getPlatformBadge();
-      return `
-      <div class="header">
-        <span class="logo">FLOQ</span>
-        <span class="platform-badge" style="color:${badge.color};background:${badge.bg}">${esc(badge.label)}</span>
-        <span id="o8-close" class="close">&times;</span>
-      </div>
-      <div class="tab-bar">${getTabBarHTML()}</div>
-      <div id="tab-generate" class="tab-content active">
-        <div id="o8-empty" class="empty">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
-          <span>Open a customer lead to activate</span>
-        </div>
-        <div id="o8-card" class="card" style="display:none">
-          <div id="o8-name" class="name"></div>
-          <div id="o8-vehicle" class="vehicle"></div>
-          <div id="o8-meta" class="meta"></div>
-          <div id="o8-last" class="last"></div>
-          <div id="o8-ctx" class="ctx" style="display:none"></div>
-        </div>
-        <div class="input-section">
-          <div class="chips">
-            <button class="chip on" data-type="text">Text</button>
-            <button class="chip on" data-type="email">Email</button>
-            <button class="chip on" data-type="crm">CRM Note</button>
-          </div>
-          <div class="input-row">
-            <button id="o8-mic" class="mic-btn" title="Voice input">🎙</button>
-            <textarea id="o8-input" class="input" placeholder="Describe the situation..." rows="3"></textarea>
-          </div>
-          <button id="o8-generate" class="gen-btn">✨ Generate</button>
-        </div>
-        <div id="o8-outputs" class="outputs"></div>
-      </div>
-      <div id="tab-coach" class="tab-content">
-        <div class="input-section">
-          <textarea id="o8-coach-input" class="input" placeholder="What did the customer just say?" rows="3"></textarea>
-          <div class="coach-chips">
-            <button class="coach-chip">Need to think about it</button>
-            <button class="coach-chip">Price too high</button>
-            <button class="coach-chip">Bad credit</button>
-            <button class="coach-chip">Spouse not here</button>
-            <button class="coach-chip">Already talking to another dealer</button>
-          </div>
-          <button id="o8-coach-btn" class="gen-btn" style="background:#7F77DD">⚡ Coach Me</button>
-        </div>
-        <div id="o8-coach-output" class="outputs"></div>
-      </div>
-      <div id="tab-alerts" class="tab-content">
-        <div class="input-section">
-          <div class="input-row">
-            <input id="o8-alert-input" class="input" placeholder="Set a reminder... e.g. Move the Tacoma by noon" style="padding:10px;border-radius:6px" />
-          </div>
-          <button id="o8-alert-btn" class="gen-btn" style="background:#FF9500">🔔 Set Alert</button>
-        </div>
-        <div id="o8-alert-list" class="outputs" style="padding:10px 14px"></div>
-      </div>
-      ${HTML_COMMAND_TAB}
-      <div class="sidebar-footer"><a id="o8-settings" class="settings-link" title="Profile Settings">&#9881; Settings</a><div class="tcpa-notice">Messages are for human review. You are responsible for TCPA compliance.</div></div>
-    `;
+    // ===== BADGE =====
+    function getBadge(): { label: string; color: string; bg: string } {
+      switch (PLATFORM) {
+        case 'vinsolutions': return { label: 'VinSolutions', color: '#7F77DD', bg: '#F0EFFF' };
+        case 'gmail': return { label: 'Gmail', color: '#dc2626', bg: '#fef2f2' };
+        case 'facebook': return { label: 'Messenger', color: '#1877f2', bg: '#eff6ff' };
+        case 'linkedin': return { label: 'LinkedIn', color: '#0a66c2', bg: '#eff6ff' };
+        case 'whatsapp': return { label: 'WhatsApp', color: '#25D366', bg: '#f0fdf4' };
+        default: return { label: '', color: '#64748b', bg: '#f1f5f9' };
+      }
     }
 
-    // ===== HTML: UNIVERSAL (manual input, no customer card) =====
-    function getHTML_Universal(): string {
-      const badge = getPlatformBadge();
-      const platformHint = isGmail ? 'Describe the email situation...'
-        : isFacebook ? 'Describe the conversation...'
-        : isLinkedIn ? 'Describe the LinkedIn interaction...'
-        : "What's happening right now?";
+    // ===== TIER GATE HTML =====
+    const GATE_CARD = `<div class="gate-card"><div class="gate-icon">🔒</div><div class="gate-title">Available in Floq Command</div><div class="gate-text">Upgrade to unlock Coach, Voice, and Screenshot mode.</div><div class="gate-contact">Contact yancy@yenes.ai</div></div>`;
+
+    // ===== HTML =====
+    function getHTML(): string {
+      const badge = getBadge();
+      const isFloor = currentTier === 'floor';
+      const customerCard = isVinSolutions ? `<div id="o8-card" class="card" style="display:none"><div id="o8-name" class="name"></div><div id="o8-vehicle" class="vehicle"></div><div id="o8-meta" class="meta"></div></div>` : '';
+      const placeholder = isVinSolutions ? 'Describe the situation or tap the mic...' : isGmail ? 'Describe the email situation...' : isFacebook ? 'Describe the conversation...' : isLinkedIn ? 'Describe the LinkedIn interaction...' : 'Describe the situation...';
 
       return `
-      <div class="header">
-        <span class="logo">FLOQ</span>
-        <span class="platform-badge" style="color:${badge.color};background:${badge.bg}">${esc(badge.label)}</span>
-        <span id="o8-close" class="close">&times;</span>
-      </div>
-      <div class="tab-bar">${getTabBarHTML()}</div>
-      <div id="tab-generate" class="tab-content active">
-        <div class="input-section" style="padding-top:8px">
-          <div class="chips">
-            <button class="chip on" data-type="text">${esc(outputLabels.text.split(' ')[0])}</button>
-            <button class="chip on" data-type="email">Email</button>
-            <button class="chip on" data-type="crm">Note</button>
-          </div>
-          <div class="input-row">
-            <button id="o8-mic" class="mic-btn" title="Voice input">🎙</button>
-            <textarea id="o8-input" class="input" placeholder="${esc(platformHint)}" rows="4"></textarea>
-          </div>
-          <button id="o8-generate" class="gen-btn">✨ Generate</button>
-        </div>
-        <div id="o8-outputs" class="outputs"></div>
-      </div>
-      <div id="tab-coach" class="tab-content">
-        <div class="input-section">
-          <textarea id="o8-coach-input" class="input" placeholder="What did the customer just say?" rows="3"></textarea>
-          <div class="coach-chips">
-            <button class="coach-chip">Need to think about it</button>
-            <button class="coach-chip">Price too high</button>
-            <button class="coach-chip">Bad credit</button>
-            <button class="coach-chip">Spouse not here</button>
-            <button class="coach-chip">Already talking to another dealer</button>
-          </div>
-          <button id="o8-coach-btn" class="gen-btn" style="background:#7F77DD">⚡ Coach Me</button>
-        </div>
-        <div id="o8-coach-output" class="outputs"></div>
-      </div>
-      <div id="tab-alerts" class="tab-content">
-        <div class="input-section">
-          <div class="input-row">
-            <input id="o8-alert-input" class="input" placeholder="Set a reminder... e.g. Move the Tacoma by noon" style="padding:10px;border-radius:6px" />
-          </div>
-          <button id="o8-alert-btn" class="gen-btn" style="background:#FF9500">🔔 Set Alert</button>
-        </div>
-        <div id="o8-alert-list" class="outputs" style="padding:10px 14px"></div>
-      </div>
-      ${HTML_CONTEXT_TAB}
-      ${HTML_VOICE_TAB}
-      ${HTML_COMMAND_TAB}
-      <div class="sidebar-footer"><a id="o8-settings" class="settings-link" title="Profile Settings">&#9881; Settings</a><div class="tcpa-notice">Messages are for human review. You are responsible for TCPA compliance.</div></div>
-    `;
+<div class="header">
+  <span class="logo">FLOQ</span>
+  <span class="badge" style="color:${badge.color};background:${badge.bg}">${esc(badge.label)}</span>
+  ${isGmail ? '<span id="o8-collapse" class="collapse-btn" title="Collapse">&#8249;</span>' : ''}
+  <span id="o8-close" class="close">&times;</span>
+</div>
+
+<div id="o8-quick" class="quick-mode">
+  ${customerCard}
+  <div class="input-section">
+    <div class="chips">
+      <button class="chip on" data-type="text">Message</button>
+      <button class="chip on" data-type="email">Email</button>
+      <button class="chip on" data-type="crm">CRM Note</button>
+    </div>
+    <div class="input-wrap">
+      <textarea id="o8-input" class="main-input" placeholder="${esc(placeholder)}" rows="3"></textarea>
+      <button id="o8-mic" class="inline-mic" title="Voice input">🎙</button>
+    </div>
+    <button id="o8-generate" class="gen-btn">Generate</button>
+  </div>
+  <div id="o8-outputs" class="outputs"></div>
+</div>
+
+<div id="o8-tools-panel" class="tools-panel" style="display:none">
+  <div class="tools-header">
+    <button id="o8-tools-back" class="back-btn">← Back</button>
+    <span class="tools-title">Tools</span>
+  </div>
+  <div class="tool-tabs">
+    <button class="tool-tab-btn active" data-tool="coach">Coach</button>
+    <button class="tool-tab-btn" data-tool="alerts">Alerts</button>
+    <button class="tool-tab-btn" data-tool="context">Context</button>
+    <button class="tool-tab-btn" data-tool="command">Command</button>
+  </div>
+
+  <div id="tool-coach" class="tool-content" style="display:block">
+    ${isFloor ? GATE_CARD : `
+    <div class="tool-section">
+      <div class="input-wrap"><textarea id="o8-coach-input" class="main-input" placeholder="What did the customer just say?" rows="2"></textarea><button id="o8-coach-mic" class="inline-mic">🎙</button></div>
+      <div class="coach-chips"><button class="coach-chip">Need to think about it</button><button class="coach-chip">Price too high</button><button class="coach-chip">Bad credit</button><button class="coach-chip">Spouse not here</button></div>
+      <button id="o8-coach-btn" class="gen-btn">Coach Me</button>
+    </div>
+    <div id="o8-coach-output" class="tool-output"></div>`}
+  </div>
+
+  <div id="tool-alerts" class="tool-content" style="display:none">
+    <div class="tool-section">
+      <div class="input-wrap"><input id="o8-alert-input" class="main-input" placeholder="e.g. Move the Tacoma by noon" /><button id="o8-alert-mic" class="inline-mic">🎙</button></div>
+      <button id="o8-alert-btn" class="gen-btn" style="background:#FF9500">Set Alert</button>
+    </div>
+    <div id="o8-alert-list" class="tool-output"></div>
+  </div>
+
+  <div id="tool-context" class="tool-content" style="display:none">
+    ${isFloor ? GATE_CARD : `
+    <div class="tool-section">
+      <div id="o8-ctx-dropzone" class="ctx-dropzone"><span>Drop screenshot or paste (Ctrl+V)</span></div>
+      <div id="o8-ctx-preview" class="ctx-preview" style="display:none"><img id="o8-ctx-img" class="ctx-img" /><button id="o8-ctx-remove" class="ctx-remove">&times;</button></div>
+      <textarea id="o8-ctx-direction" class="main-input" placeholder="What do you want to say?" rows="2"></textarea>
+      <button id="o8-ctx-generate" class="gen-btn" disabled>Generate Reply</button>
+    </div>
+    <div id="o8-ctx-output" class="tool-output"></div>`}
+  </div>
+
+  <div id="tool-command" class="tool-content" style="display:none">
+    ${isFloor ? GATE_CARD : `
+    <div class="tool-section">
+      <div class="input-wrap"><textarea id="o8-cmd-input" class="main-input" placeholder="Type a command..." rows="2"></textarea><button id="o8-cmd-mic" class="inline-mic">🎙</button></div>
+      <button id="o8-cmd-execute" class="gen-btn">Execute</button>
+    </div>
+    <div id="o8-cmd-status" class="tool-output"></div>`}
+  </div>
+</div>
+
+<div class="sidebar-footer">
+  <button id="o8-tools-btn" class="tools-btn">⚙ Tools</button>
+  <a id="o8-settings" class="settings-link">Settings</a>
+  <div class="tcpa">Messages are for human review. You are responsible for TCPA compliance.</div>
+</div>`;
     }
 
     // ===== CSS =====
-    function getCSS(sidebarSide: string): string {
-      const borderSide = sidebarSide === 'left' ? 'border-right' : 'border-left';
-      const shadowDir = sidebarSide === 'left' ? '4px' : '-4px';
+    function getCSS(side: string, width: string): string {
+      const border = side === 'left' ? 'border-right' : 'border-left';
+      const shadow = side === 'left' ? '4px' : '-4px';
       return `
-      * { margin:0; padding:0; box-sizing:border-box; }
-      :host { all:initial; font-family:system-ui,-apple-system,sans-serif; font-size:13px; color:#1a202c; }
-      #o8 { width:320px; height:100vh; background:#fff; ${borderSide}:1px solid #e2e8f0; overflow-y:auto; overscroll-behavior:contain; box-shadow:${shadowDir} 0 16px rgba(0,0,0,0.06); display:flex; flex-direction:column; }
+* { margin:0; padding:0; box-sizing:border-box; }
+:host { all:initial; font-family:system-ui,-apple-system,sans-serif; font-size:13px; color:#1a202c; }
+#o8 { width:${width}; height:100vh; background:#fff; ${border}:1px solid #e2e8f0; overflow-y:auto; overscroll-behavior:contain; box-shadow:${shadow} 0 16px rgba(0,0,0,0.06); display:flex; flex-direction:column; }
 
-      .header { padding:12px 14px; border-bottom:1px solid #e8eaed; display:flex; justify-content:space-between; align-items:center; flex-shrink:0; gap:8px; }
-      .logo { font-size:14px; font-weight:700; color:#7F77DD; letter-spacing:3px; }
-      .platform-badge { font-size:9px; font-weight:600; padding:2px 8px; border-radius:10px; text-transform:uppercase; letter-spacing:1px; flex:1; text-align:center; }
-      .close { font-size:20px; color:#94a3b8; cursor:pointer; padding:0 4px; }
-      .close:hover { color:#475569; }
+.header { padding:10px 14px; border-bottom:1px solid #e8eaed; display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.logo { font-size:14px; font-weight:800; color:#7F77DD; letter-spacing:3px; }
+.badge { font-size:9px; font-weight:600; padding:2px 8px; border-radius:10px; text-transform:uppercase; letter-spacing:0.5px; flex:1; text-align:center; }
+.close { font-size:20px; color:#94a3b8; cursor:pointer; padding:0 4px; }
+.close:hover { color:#475569; }
+.collapse-btn { font-size:18px; color:#94a3b8; cursor:pointer; padding:0 4px; }
 
-      .empty { padding:28px 14px; text-align:center; color:#94a3b8; font-size:12px; display:flex; flex-direction:column; align-items:center; gap:8px; flex-shrink:0; }
+.quick-mode { display:flex; flex-direction:column; flex:1; overflow:hidden; }
 
-      .card { padding:12px 14px; border-bottom:1px solid #e8eaed; flex-shrink:0; }
-      .name { font-size:15px; font-weight:600; color:#1a202c; }
-      .vehicle { font-size:12px; color:#2563eb; margin-top:1px; }
-      .meta { font-size:11px; color:#64748b; margin-top:4px; }
-      .last { font-size:11px; color:#94a3b8; margin-top:2px; }
-      .ctx { font-size:11px; color:#16a34a; margin-top:4px; font-weight:500; }
+.card { padding:10px 14px; border-bottom:1px solid #e8eaed; flex-shrink:0; }
+.name { font-size:14px; font-weight:600; color:#1a202c; }
+.vehicle { font-size:11px; color:#2563eb; margin-top:1px; }
+.meta { font-size:10px; color:#64748b; margin-top:2px; }
 
-      .input-section { padding:12px 14px; border-bottom:1px solid #e8eaed; flex-shrink:0; }
-      .chips { display:flex; gap:5px; margin-bottom:8px; }
-      .chip { padding:5px 12px; border-radius:16px; font-size:11px; font-weight:600; font-family:inherit; border:1.5px solid #e2e8f0; background:#fff; color:#94a3b8; cursor:pointer; transition:all 0.15s; position:relative; }
-      .chip.on { border-color:#7F77DD; color:#7F77DD; background:#F0EFFF; }
-      .chip.on::after { content:''; position:absolute; top:-2px; right:-2px; width:7px; height:7px; border-radius:50%; background:#16a34a; border:1.5px solid #fff; }
+.input-section { padding:12px 14px; border-bottom:1px solid #e8eaed; flex-shrink:0; }
+.chips { display:flex; gap:5px; margin-bottom:8px; }
+.chip { padding:5px 12px; border-radius:16px; font-size:11px; font-weight:600; font-family:inherit; border:1.5px solid #e2e8f0; background:#fff; color:#94a3b8; cursor:pointer; transition:all 0.15s; position:relative; }
+.chip.on { border-color:#7F77DD; color:#7F77DD; background:#F0EFFF; }
+.chip.on::after { content:''; position:absolute; top:-2px; right:-2px; width:7px; height:7px; border-radius:50%; background:#16a34a; border:1.5px solid #fff; }
 
-      .input-row { display:flex; gap:6px; align-items:flex-start; }
-      .mic-btn { width:40px; height:40px; border-radius:50%; border:2px solid #e2e8f0; background:#f8fafc; cursor:pointer; font-size:18px; display:flex; align-items:center; justify-content:center; flex-shrink:0; transition:all .15s; }
-      .mic-btn:hover { border-color:#2563eb; }
-      .input { flex:1; padding:8px 10px; border:1px solid #e2e8f0; border-radius:6px; font-size:13px; font-family:inherit; resize:none; outline:none; color:#1a202c; }
-      .input:focus { border-color:#2563eb; }
-      .input::placeholder { color:#94a3b8; }
+.input-wrap { position:relative; display:flex; align-items:flex-start; }
+.main-input { flex:1; padding:8px 36px 8px 10px; border:1px solid #e2e8f0; border-radius:6px; font-size:13px; font-family:inherit; resize:none; outline:none; color:#1a202c; }
+.main-input:focus { border-color:#7F77DD; }
+.main-input::placeholder { color:#94a3b8; }
+.inline-mic { position:absolute; right:6px; top:6px; width:26px; height:26px; border-radius:50%; border:none; background:transparent; cursor:pointer; font-size:14px; display:flex; align-items:center; justify-content:center; transition:all .15s; }
+.inline-mic:hover { background:#F0EFFF; }
+.inline-mic.mic-active { background:#fef2f2; animation:mic-pulse 1s infinite; }
+@keyframes mic-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.15)} }
 
-      .gen-btn { width:100%; padding:10px; background:#7F77DD; color:#fff; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit; margin-top:8px; transition:all 0.15s; }
-      .gen-btn:hover { background:#534AB7; }
-      .gen-btn:disabled { background:#94a3b8; cursor:wait; }
+.gen-btn { width:100%; padding:10px; background:#7F77DD; color:#fff; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit; margin-top:8px; transition:background 0.15s; }
+.gen-btn:hover { background:#534AB7; }
+.gen-btn:disabled { background:#94a3b8; cursor:wait; }
 
-      .outputs { padding:10px 14px; flex:1; overflow-y:auto; }
-      .out-card { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; margin-bottom:8px; }
-      .out-label { font-size:9px; font-weight:700; color:#2563eb; letter-spacing:1px; text-transform:uppercase; margin-bottom:4px; }
-      .out-text { font-size:12px; line-height:1.5; color:#1a202c; max-height:180px; overflow-y:auto; padding-right:4px; }
-      .out-text::-webkit-scrollbar { width:4px; }
-      .out-text::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:2px; }
-      .out-text::-webkit-scrollbar-track { background:transparent; }
-      .out-actions { display:flex; gap:6px; margin-top:6px; }
-      .out-copy { padding:5px 14px; background:#f0f2f5; border:1px solid #dde1e6; border-radius:4px; font-size:11px; font-weight:600; color:#475569; cursor:pointer; font-family:inherit; transition:all 0.15s; }
-      .out-copy:hover { background:#e2e8f0; }
-      .out-paste { padding:5px 14px; background:#2563eb; border:1px solid #1d4ed8; border-radius:4px; font-size:11px; font-weight:600; color:#fff; cursor:pointer; font-family:inherit; transition:all 0.15s; }
-      .out-paste:hover { background:#1d4ed8; }
-      .out-paste:disabled { background:#94a3b8; border-color:#94a3b8; cursor:wait; }
-      .out-paste-status { font-size:10px; margin-top:4px; min-height:14px; }
+.outputs { padding:8px 14px; flex:1; overflow-y:auto; }
+.out-card { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; margin-bottom:8px; }
+.out-label { font-size:9px; font-weight:700; color:#7F77DD; letter-spacing:1px; text-transform:uppercase; margin-bottom:4px; }
+.out-text { font-size:12px; line-height:1.5; color:#1a202c; max-height:180px; overflow-y:auto; }
+.out-actions { display:flex; gap:6px; margin-top:6px; }
+.out-copy { padding:4px 12px; background:#f0f2f5; border:1px solid #dde1e6; border-radius:4px; font-size:11px; font-weight:600; color:#475569; cursor:pointer; font-family:inherit; }
+.out-copy:hover { background:#e2e8f0; }
+.out-paste { padding:4px 12px; background:#2563eb; border:1px solid #1d4ed8; border-radius:4px; font-size:11px; font-weight:600; color:#fff; cursor:pointer; font-family:inherit; }
+.out-paste:hover { background:#1d4ed8; }
+.out-paste-status { font-size:10px; margin-top:4px; min-height:14px; }
 
-      .tab-bar { display:flex; border-bottom:1px solid #e8eaed; flex-shrink:0; overflow-x:auto; }
-      .tab-btn { flex:1; padding:8px 4px; font-size:11px; font-weight:600; font-family:inherit; border:none; background:transparent; color:#94a3b8; cursor:pointer; border-bottom:2px solid transparent; transition:all .15s; white-space:nowrap; min-width:0; }
-      .tab-btn.active { color:#2563eb; border-bottom-color:#2563eb; }
-      .tab-btn:hover { color:#475569; }
-      .tab-content { display:none; flex-direction:column; flex:1; overflow:hidden; }
-      .tab-content.active { display:flex; }
+/* Tools panel */
+.tools-panel { display:flex; flex-direction:column; flex:1; overflow:hidden; }
+.tools-header { padding:10px 14px; border-bottom:1px solid #e8eaed; display:flex; align-items:center; gap:8px; }
+.back-btn { background:none; border:none; color:#7F77DD; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit; padding:0; }
+.tools-title { font-size:13px; font-weight:600; color:#1a202c; }
+.tool-tabs { display:flex; border-bottom:1px solid #e8eaed; }
+.tool-tab-btn { flex:1; padding:8px 4px; font-size:11px; font-weight:600; font-family:inherit; border:none; background:transparent; color:#94a3b8; cursor:pointer; border-bottom:2px solid transparent; }
+.tool-tab-btn.active { color:#7F77DD; border-bottom-color:#7F77DD; }
+.tool-content { padding:12px 14px; flex:1; overflow-y:auto; }
+.tool-section { display:flex; flex-direction:column; gap:8px; }
+.tool-output { padding:8px 0; }
+.tool-result { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; font-size:12px; line-height:1.6; margin-top:8px; }
 
-      .ctx-dropzone { border:2px dashed #7F77DD; border-radius:8px; background:#F0EFFF; padding:20px; text-align:center; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:8px; font-size:11px; color:#7F77DD; margin-bottom:8px; transition:all .15s; min-height:80px; justify-content:center; }
-      .ctx-dropzone:hover, .ctx-dropzone.dragover { background:#e8e4ff; border-color:#534AB7; }
-      .ctx-preview { position:relative; margin-bottom:8px; text-align:center; }
-      .ctx-img { max-width:200px; max-height:120px; border-radius:6px; border:1px solid #e2e8f0; }
-      .ctx-remove { position:absolute; top:-6px; right:calc(50% - 106px); width:20px; height:20px; border-radius:50%; background:#FF3B30; color:#fff; border:none; font-size:12px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.coach-chips { display:flex; flex-wrap:wrap; gap:4px; }
+.coach-chip { padding:4px 10px; border-radius:14px; font-size:10px; font-weight:500; font-family:inherit; border:1px solid #e2e8f0; background:#f8fafc; color:#64748b; cursor:pointer; }
+.coach-chip:hover { border-color:#7F77DD; color:#7F77DD; background:#F0EFFF; }
 
-      .voice-section { padding:20px 14px; text-align:center; }
-      .voice-mic { width:80px; height:80px; border-radius:50%; background:#7F77DD; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; margin:0 auto 12px; transition:all .15s; }
-      .voice-mic:hover { background:#534AB7; }
-      .voice-mic.active { background:#FF3B30; animation:pulse-mic 1s infinite; }
-      @keyframes pulse-mic { 0%,100% { transform:scale(1); } 50% { transform:scale(1.08); } }
-      .voice-label { font-size:13px; color:#636366; font-weight:500; margin-bottom:16px; }
-      .voice-transcript { background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:10px; font-size:12px; line-height:1.5; color:#1a202c; min-height:60px; max-height:120px; overflow-y:auto; margin:0 14px 8px; outline:none; text-align:left; }
+/* Gate card */
+.gate-card { text-align:center; padding:24px 16px; }
+.gate-icon { font-size:24px; margin-bottom:8px; }
+.gate-title { font-size:14px; font-weight:700; color:#1a202c; margin-bottom:4px; }
+.gate-text { font-size:12px; color:#64748b; line-height:1.5; margin-bottom:8px; }
+.gate-contact { font-size:11px; color:#7F77DD; font-weight:600; }
 
-      .coach-chips { display:flex; flex-wrap:wrap; gap:4px; margin:8px 0; }
-      .coach-chip { padding:4px 10px; border-radius:14px; font-size:10px; font-weight:500; font-family:inherit; border:1px solid #e2e8f0; background:#f8fafc; color:#64748b; cursor:pointer; transition:all .15s; }
-      .coach-chip:hover { border-color:#7F77DD; color:#7F77DD; background:#F0EFFF; }
+/* Context */
+.ctx-dropzone { border:2px dashed #7F77DD; border-radius:8px; background:#F0EFFF; padding:16px; text-align:center; font-size:11px; color:#7F77DD; display:flex; align-items:center; justify-content:center; min-height:60px; cursor:pointer; }
+.ctx-dropzone.dragover { background:#e8e4ff; }
+.ctx-preview { position:relative; text-align:center; margin-bottom:8px; }
+.ctx-img { max-width:180px; max-height:100px; border-radius:6px; border:1px solid #e2e8f0; }
+.ctx-remove { position:absolute; top:-6px; right:calc(50% - 96px); width:18px; height:18px; border-radius:50%; background:#FF3B30; color:#fff; border:none; font-size:11px; cursor:pointer; }
 
-      .coach-direction { background:#F0EFFF; border:1px solid #7F77DD; border-radius:8px; padding:12px; margin:8px 14px; }
-      .coach-label { font-size:9px; font-weight:700; color:#7F77DD; letter-spacing:1px; text-transform:uppercase; margin-bottom:6px; }
-      .coach-text { font-size:13px; line-height:1.6; color:#1a202c; }
+/* Alerts */
+.alert-item { display:flex; align-items:center; padding:6px 8px; background:#FFF7ED; border:1px solid #FBBF24; border-radius:6px; margin-bottom:4px; font-size:11px; gap:6px; }
+.alert-time { font-size:10px; color:#92400E; margin-left:auto; }
+.alert-dismiss { background:none; border:none; color:#94a3b8; cursor:pointer; font-size:14px; }
 
-      .alert-item { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; background:#FFF7ED; border:1px solid #FBBF24; border-radius:6px; margin-bottom:6px; font-size:11px; }
-      .alert-task { flex:1; color:#1a202c; font-weight:500; }
-      .alert-time { font-size:10px; color:#92400E; margin:0 8px; }
-      .alert-dismiss { background:none; border:none; color:#94a3b8; cursor:pointer; font-size:14px; padding:0 4px; }
-
-      .sidebar-footer { padding:8px 14px; border-top:1px solid #e8eaed; flex-shrink:0; text-align:center; }
-      .tcpa-notice { font-size:10px; color:#9CA3AF; margin-top:4px; line-height:1.3; }
-      .settings-link { font-size:10px; color:#94a3b8; cursor:pointer; text-decoration:none; }
-      .settings-link:hover { color:#6D28D9; }
-
-      .cmd-section { padding:12px 14px; display:flex; flex-direction:column; align-items:center; gap:8px; }
-      .cmd-mic-wrap { display:flex; flex-direction:column; align-items:center; gap:8px; margin:8px 0; }
-      .cmd-mic { width:80px; height:80px; border-radius:50%; background:#7F77DD; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .2s; box-shadow:0 2px 12px rgba(127,119,221,0.3); }
-      .cmd-mic:hover { transform:scale(1.05); box-shadow:0 4px 16px rgba(127,119,221,0.4); }
-      .cmd-mic.recording { background:#FF3B30; animation:mic-pulse 1.5s infinite; }
-      @keyframes mic-pulse { 0%,100%{box-shadow:0 0 0 0 rgba(255,59,48,0.4)} 50%{box-shadow:0 0 0 16px rgba(255,59,48,0)} }
-      .cmd-mic-label { font-size:12px; color:#636366; }
-      .cmd-transcript { width:100%; font-size:12px; color:#7F77DD; font-style:italic; text-align:center; padding:4px 8px; min-height:20px; }
-      .cmd-input { width:100%; font-size:12px; }
-      .cmd-chips { display:flex; flex-wrap:wrap; gap:4px; width:100%; }
-      .cmd-chip { padding:4px 10px; border-radius:14px; font-size:10px; font-weight:500; font-family:inherit; border:1px solid #e2e8f0; background:#f8fafc; color:#64748b; cursor:pointer; transition:all .15s; }
-      .cmd-chip:hover { border-color:#7F77DD; color:#7F77DD; background:#F0EFFF; }
-      .cmd-execute { background:#7F77DD !important; }
-      .cmd-execute:hover { background:#534AB7 !important; }
-      .cmd-hint { font-size:11px; color:#636366; text-align:center; }
-      .cmd-status-area { padding:8px 14px; }
-      .cmd-result { border-radius:8px; padding:12px; margin-bottom:8px; font-size:12px; line-height:1.5; }
-      .cmd-result.success { background:#F0FDF4; border:1px solid #34C759; color:#1a202c; }
-      .cmd-result.error { background:#FEF2F2; border:1px solid #FF3B30; color:#1a202c; }
-      .cmd-result-label { font-size:9px; font-weight:700; letter-spacing:1px; text-transform:uppercase; margin-bottom:6px; }
-      .cmd-result.success .cmd-result-label { color:#34C759; }
-      .cmd-result.error .cmd-result-label { color:#FF3B30; }
-      .cmd-result-text { font-size:12px; line-height:1.5; }
-      .cmd-result-actions { display:flex; gap:6px; margin-top:8px; }
-      .cmd-retry { padding:5px 14px; background:#FF3B30; border:none; border-radius:4px; font-size:11px; font-weight:600; color:#fff; cursor:pointer; font-family:inherit; }
-    `;
+/* Footer */
+.sidebar-footer { padding:8px 14px; border-top:1px solid #e8eaed; display:flex; align-items:center; gap:8px; flex-shrink:0; flex-wrap:wrap; }
+.tools-btn { background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:4px 10px; font-size:11px; font-weight:600; color:#64748b; cursor:pointer; font-family:inherit; }
+.tools-btn:hover { background:#F0EFFF; color:#7F77DD; border-color:#7F77DD; }
+.settings-link { font-size:10px; color:#94a3b8; cursor:pointer; text-decoration:none; margin-left:auto; }
+.settings-link:hover { color:#7F77DD; }
+.tcpa { width:100%; font-size:9px; color:#9CA3AF; line-height:1.3; margin-top:4px; }
+`;
     }
 
-    // ===== NETWORK INTERCEPTION (VinSolutions only) =====
+    // ===== NETWORK INTERCEPTION (VinSolutions) =====
     if (isVinSolutions && isUIFrame) {
-      try {
-        const script = document.createElement('script');
-        script.src = browser.runtime.getURL('oper8er-intercept.js');
-        (document.head || document.documentElement).appendChild(script);
-        script.onload = () => script.remove();
-      } catch(e) {}
-
-      window.addEventListener('message', (event) => {
-        if (event.data?.type === 'OPER8ER_LEAD_DATA' && event.data?.data?.customerName) {
-          leadData = event.data.data;
-          updateSidebar();
-        }
-      });
+      try { const script = document.createElement('script'); script.src = browser.runtime.getURL('oper8er-intercept.js'); (document.head || document.documentElement).appendChild(script); script.onload = () => script.remove(); } catch(e) {}
+      window.addEventListener('message', (event) => { if (event.data?.type === 'OPER8ER_LEAD_DATA' && event.data?.data?.customerName) { leadData = event.data.data; updateSidebar(); } });
     }
   },
 });
