@@ -466,6 +466,7 @@ async function handleContextReply(payload: { image: string; direction: string })
     });
 
     if (resp.status === 401) throw new Error('License invalid or expired.');
+    if (resp.status === 413) throw new Error('Screenshot too large — try a smaller crop');
     if (resp.status === 429) throw new Error('Too many requests. Wait a few seconds.');
     // If 403 (tier gate) or other error, fall through to vision fallback
     if (resp.ok) return await resp.json();
@@ -496,6 +497,7 @@ async function handleContextReply(payload: { image: string; direction: string })
     })
   });
 
+  if (resp.status === 413) throw new Error('Screenshot too large — try a smaller crop');
   if (!resp.ok) {
     const errBody = await resp.json().catch(() => ({ error: `Server error ${resp.status}` }));
     throw new Error(errBody.error || `Error: ${resp.status}`);

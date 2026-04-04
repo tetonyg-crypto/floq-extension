@@ -468,6 +468,24 @@ export default defineContentScript({
       };
     }
 
+    // ===== IMAGE COMPRESSION for Context Reply =====
+    function compressImage(base64: string, maxWidth: number = 800, quality: number = 0.7): Promise<string> {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const ratio = Math.min(maxWidth / img.width, 1);
+          canvas.width = img.width * ratio;
+          canvas.height = img.height * ratio;
+          const ctx = canvas.getContext('2d');
+          if (ctx) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = () => resolve(base64); // fallback to original if compression fails
+        img.src = base64;
+      });
+    }
+
     function showToast(shadow: ShadowRoot, msg: string) {
       const existing = shadow.getElementById('floq-toast'); if (existing) existing.remove();
       const toast = document.createElement('div'); toast.id = 'floq-toast'; toast.textContent = msg;
@@ -649,8 +667,20 @@ export default defineContentScript({
       if (ctxGen) {
         ctxGen.addEventListener('click', async () => {
           if (!contextImage || !ctxDir?.value.trim()) return;
-          ctxGen.textContent = 'Analyzing...'; ctxGen.disabled = true; if (ctxOut) ctxOut.innerHTML = '';
-          try { const resp = await safeSend({ type: 'CONTEXT_REPLY', payload: { image: contextImage, direction: ctxDir.value.trim() } }); if (resp.error) addOutput(s, 'Error', resp.error, 'o8-ctx-output'); else addOutput(s, 'REPLY', resp.reply || resp.raw || '', 'o8-ctx-output'); } catch(e: any) { if (e.message.includes('Reload') || e.message.includes('connection')) { showReconnectBanner(s); } addOutput(s, 'Error', e.message, 'o8-ctx-output'); }
+          ctxGen.textContent = 'Compressing...'; ctxGen.disabled = true; if (ctxOut) ctxOut.innerHTML = '';
+          try {
+            const compressed = await compressImage(contextImage, 800, 0.7);
+            ctxGen.textContent = 'Analyzing...';
+            const resp = await safeSend({ type: 'CONTEXT_REPLY', payload: { image: compressed, direction: ctxDir.value.trim() } });
+            if (resp.error) {
+              const msg = resp.error.includes('413') ? 'Screenshot too large — try a smaller crop' : resp.error;
+              addOutput(s, 'Error', msg, 'o8-ctx-output');
+            } else { addOutput(s, 'REPLY', resp.reply || resp.raw || '', 'o8-ctx-output'); }
+          } catch(e: any) {
+            if (e.message.includes('Reload') || e.message.includes('connection')) { showReconnectBanner(s); }
+            const msg = e.message.includes('413') ? 'Screenshot too large — try a smaller crop' : e.message;
+            addOutput(s, 'Error', msg, 'o8-ctx-output');
+          }
           ctxGen.textContent = 'Generate Reply'; ctxGen.disabled = false; updCtx();
         });
       }
