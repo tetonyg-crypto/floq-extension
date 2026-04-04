@@ -305,34 +305,73 @@ export default defineContentScript({
       return '300px';
     }
 
-    // ===== PILL — all platforms get a pill for toggle =====
+    // ===== PILL — draggable, position saved to storage =====
     let pill: HTMLElement | null = document.createElement('div');
     pill.id = 'oper8er-pill';
     pill.textContent = '⚡ FQ';
 
-    if (isVinSolutions) {
-      // VinSolutions: pill on left edge
-      Object.assign(pill.style, {
-        position:'fixed', left:'0', top:'45%', zIndex:'2147483646',
-        background:'#7F77DD', color:'#fff', padding:'8px 10px', borderRadius:'0 8px 8px 0',
-        fontSize:'12px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'pointer',
-        boxShadow:'2px 2px 12px rgba(127,119,221,0.35)', letterSpacing:'0.5px', opacity:'0.9',
-        transition:'opacity 0.15s, transform 0.15s, padding 0.15s'
-      });
-    } else {
-      // Other platforms: edge pill
-      const pillSide = isGmail ? 'left' : 'right';
-      Object.assign(pill.style, {
-        position:'fixed', [pillSide]:'0', top:'50%', transform:'translateY(-50%)', zIndex:'2147483646',
-        background:'#7F77DD', color:'#fff', padding:'6px 8px 6px 6px', borderRadius: isGmail ? '0 6px 6px 0' : '6px 0 0 6px',
-        fontSize:'11px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'pointer',
-        boxShadow:'0 2px 8px rgba(127,119,221,0.25)', letterSpacing:'0.5px', opacity:'0.85',
-        transition:'opacity 0.15s, padding 0.15s'
-      });
-    }
-    pill.onmouseenter = () => { if(pill) { pill.style.opacity = '1'; pill.style.padding = '8px 16px'; pill.textContent = '⚡ Floq'; } };
-    pill.onmouseleave = () => { if(pill) { pill.style.opacity = '0.9'; pill.style.padding = isVinSolutions ? '8px 14px' : '6px 8px 6px 6px'; pill.textContent = '⚡ FQ'; } };
-    pill.onclick = () => { sidebarOpen ? closeSidebar() : openSidebar(); };
+    // Default position — can be overridden by saved position
+    Object.assign(pill.style, {
+      position:'fixed', right:'16px', top:'50%', zIndex:'2147483646',
+      background:'#7F77DD', color:'#fff', padding:'8px 12px', borderRadius:'8px',
+      fontSize:'12px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'grab',
+      boxShadow:'0 2px 12px rgba(127,119,221,0.35)', letterSpacing:'0.5px', opacity:'0.9',
+      transition:'opacity 0.15s', userSelect:'none', touchAction:'none'
+    });
+
+    // Load saved position from storage
+    browser.storage.local.get(['floq_pill_x', 'floq_pill_y']).then(saved => {
+      if (pill && saved.floq_pill_x !== undefined && saved.floq_pill_y !== undefined) {
+        pill.style.left = saved.floq_pill_x + 'px';
+        pill.style.top = saved.floq_pill_y + 'px';
+        pill.style.right = 'auto';
+      }
+    }).catch(() => {});
+
+    // Drag logic — distinguish drag from click
+    let isDragging = false;
+    let dragStartX = 0, dragStartY = 0;
+    let pillStartX = 0, pillStartY = 0;
+    let didDrag = false;
+
+    pill.addEventListener('mousedown', (e: MouseEvent) => {
+      if (!pill) return;
+      isDragging = true; didDrag = false;
+      dragStartX = e.clientX; dragStartY = e.clientY;
+      const rect = pill.getBoundingClientRect();
+      pillStartX = rect.left; pillStartY = rect.top;
+      pill.style.cursor = 'grabbing';
+      pill.style.transition = 'none'; // disable transitions during drag
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e: MouseEvent) => {
+      if (!isDragging || !pill) return;
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) didDrag = true;
+      if (didDrag) {
+        pill.style.left = (pillStartX + dx) + 'px';
+        pill.style.top = (pillStartY + dy) + 'px';
+        pill.style.right = 'auto';
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!isDragging || !pill) { isDragging = false; return; }
+      isDragging = false;
+      pill.style.cursor = 'grab';
+      pill.style.transition = 'opacity 0.15s';
+      if (didDrag) {
+        // Save position
+        const rect = pill.getBoundingClientRect();
+        browser.storage.local.set({ floq_pill_x: rect.left, floq_pill_y: rect.top });
+      }
+    });
+
+    pill.onmouseenter = () => { if(pill && !isDragging) { pill.style.opacity = '1'; pill.textContent = '⚡ Floq'; } };
+    pill.onmouseleave = () => { if(pill && !isDragging) { pill.style.opacity = '0.9'; pill.textContent = '⚡ FQ'; } };
+    pill.onclick = (e: MouseEvent) => { if (didDrag) { e.preventDefault(); return; } sidebarOpen ? closeSidebar() : openSidebar(); };
     document.body.appendChild(pill);
 
     // ===== FIX 7: VinSolutions SPA navigation observer =====
