@@ -5,8 +5,8 @@ export default defineConfig({
   manifest: {
     name: 'Floq — AI Sales Assistant for VinSolutions',
     short_name: 'Floq',
-    version: '1.8.0',
-    version_name: '1.8.0',
+    version: '1.8.1',
+    version_name: '1.8.1',
     description: 'AI writes the text, email, and CRM note inside VinSolutions. Every rep performs like your best one.',
     homepage_url: 'https://floqsales.com',
     icons: {
