@@ -184,63 +184,7 @@ export default defineContentScript({
       return { customerName: name, phone, email, vehicle, source, status, lastContact };
     }
 
-    const bodyText = document.body?.innerText || '';
-    const isUIFrame = bodyText.length > 2000 || !isVinSolutions;
-
-    if (isVinSolutions) {
-      // Gather text from main document + all accessible iframes (right panel)
-      function gatherAllText(): string {
-        let text = document.body?.innerText || '';
-        const iframes = document.querySelectorAll('iframe');
-        for (const iframe of iframes) {
-          try {
-            const doc = iframe.contentDocument || (iframe as any).contentWindow?.document;
-            if (doc?.body) text += '\n' + doc.body.innerText;
-          } catch(e) {}
-        }
-        return text;
-      }
-
-      function attemptScan() {
-        const t = gatherAllText();
-        if (t.length < 50) return;
-        const s = scanText(t);
-        if (s.customerName) browser.storage.local.set({ oper8er_lead: s, oper8er_lead_time: Date.now() });
-        const v = extractVehicle(t);
-        if (v) browser.storage.local.set({ oper8er_vehicle_info: v, oper8er_vehicle_info_time: Date.now() });
-      }
-      attemptScan();
-      let lastScannedName = '';
-      // Poll every 2 seconds for name changes
-      setInterval(() => {
-        const t = gatherAllText();
-        const nm = t.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || t.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
-        const curName = nm ? nm[1].trim() : '';
-        if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
-      }, 2000);
-
-      // MutationObserver on body to catch right-panel content changes instantly
-      const vinObserver = new MutationObserver(() => {
-        const t = gatherAllText();
-        const nm = t.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || t.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
-        const curName = nm ? nm[1].trim() : '';
-        if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
-      });
-      vinObserver.observe(document.body, { childList: true, subtree: true });
-    }
-
-    if (isVinSolutions && isUIFrame) {
-      setInterval(async () => {
-        try {
-          const r = await browser.storage.local.get(['oper8er_lead', 'oper8er_lead_time', 'oper8er_vehicle_info', 'oper8er_vehicle_info_time']);
-          const lead = r.oper8er_lead; if (!lead?.customerName) return;
-          if (!lead.vehicle && r.oper8er_vehicle_info && r.oper8er_vehicle_info_time > Date.now() - 15000) { lead.vehicle = r.oper8er_vehicle_info; await browser.storage.local.set({ oper8er_lead: lead, oper8er_lead_time: Date.now() }); }
-          if (lead.customerName !== leadData?.customerName || lead.vehicle !== leadData?.vehicle) { leadData = lead; updateSidebar(); }
-        } catch(e) {}
-      }, 2000);
-    }
-
-    // Only inject in top frame
+    // Only inject in top frame — scanning, sidebar, pill all belong to the top frame only
     if (window !== window.top) return;
 
     // ===== FIX 6: HARD GUARD — never inject twice =====
@@ -289,9 +233,60 @@ export default defineContentScript({
 
     console.log(`[Floq] Injection proceeding — platform: ${PLATFORM}, isTop: ${window === window.top}`);
 
+    // ===== VINSOLUTIONS SCANNING (top frame only) =====
+    if (isVinSolutions) {
+      function gatherAllText(): string {
+        let text = document.body?.innerText || '';
+        const iframes = document.querySelectorAll('iframe');
+        for (const iframe of iframes) {
+          try {
+            const doc = iframe.contentDocument || (iframe as any).contentWindow?.document;
+            if (doc?.body) text += '\n' + doc.body.innerText;
+          } catch(e) {}
+        }
+        return text;
+      }
+
+      function attemptScan() {
+        const t = gatherAllText();
+        if (t.length < 50) return;
+        const s = scanText(t);
+        if (s.customerName) browser.storage.local.set({ oper8er_lead: s, oper8er_lead_time: Date.now() });
+        const v = extractVehicle(t);
+        if (v) browser.storage.local.set({ oper8er_vehicle_info: v, oper8er_vehicle_info_time: Date.now() });
+      }
+      attemptScan();
+      let lastScannedName = '';
+      setInterval(() => {
+        const t = gatherAllText();
+        const nm = t.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || t.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
+        const curName = nm ? nm[1].trim() : '';
+        if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
+      }, 2000);
+
+      const vinObserver = new MutationObserver(() => {
+        const t = gatherAllText();
+        const nm = t.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || t.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
+        const curName = nm ? nm[1].trim() : '';
+        if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
+      });
+      vinObserver.observe(document.body, { childList: true, subtree: true });
+
+      // Poll storage for lead data and update sidebar
+      setInterval(async () => {
+        try {
+          const r = await browser.storage.local.get(['oper8er_lead', 'oper8er_lead_time', 'oper8er_vehicle_info', 'oper8er_vehicle_info_time']);
+          const lead = r.oper8er_lead; if (!lead?.customerName) return;
+          if (!lead.vehicle && r.oper8er_vehicle_info && r.oper8er_vehicle_info_time > Date.now() - 15000) { lead.vehicle = r.oper8er_vehicle_info; await browser.storage.local.set({ oper8er_lead: lead, oper8er_lead_time: Date.now() }); }
+          if (lead.customerName !== leadData?.customerName || lead.vehicle !== leadData?.vehicle) { leadData = lead; updateSidebar(); }
+        } catch(e) {}
+      }, 2000);
+    }
+
     // ===== SIDEBAR WIDTH PER PLATFORM =====
     function getSidebarWidth(): string {
       if (isGmail || isInstagram) return '280px';
+      if (isVinSolutions) return '320px';
       return '300px';
     }
 
@@ -465,15 +460,6 @@ export default defineContentScript({
       Object.assign(toast.style, { position:'fixed', bottom:'16px', left:'50%', transform:'translateX(-50%)', background:'#1a202c', color:'#fff', padding:'8px 16px', borderRadius:'6px', fontSize:'11px', fontWeight:'500', zIndex:'99', opacity:'1', transition:'opacity 0.3s' });
       shadow.getElementById('o8')?.appendChild(toast);
       setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 2500);
-    }
-
-    // ===== VIN MAIN CONTAINER for margin push =====
-    function getVinMainContainer(): HTMLElement | null {
-      if (!isVinSolutions) return null;
-      return document.querySelector('#mainAreaPanel') as HTMLElement
-        || document.querySelector('.main-content') as HTMLElement
-        || document.querySelector('#page-content') as HTMLElement
-        || document.querySelector('body') as HTMLElement;
     }
 
     // ===== SIDEBAR =====
@@ -658,13 +644,8 @@ export default defineContentScript({
       if (isVinSolutions) updateSidebar();
     }
 
-    function pushContent(open: boolean) {
-      const w = getSidebarWidth();
-      if (isVinSolutions) {
-        const main = getVinMainContainer();
-        // Floating panel — no margin push
-      }
-      // Gmail: overlay only, no margin push (FIX 3)
+    function pushContent(_open: boolean) {
+      // Sidebar is a fixed overlay — no margin push needed
     }
 
     function closeSidebar() {
@@ -1050,7 +1031,7 @@ export default defineContentScript({
     }
 
     // ===== NETWORK INTERCEPTION (VinSolutions) =====
-    if (isVinSolutions && isUIFrame) {
+    if (isVinSolutions) {
       try { const script = document.createElement('script'); script.src = browser.runtime.getURL('oper8er-intercept.js'); (document.head || document.documentElement).appendChild(script); script.onload = () => script.remove(); } catch(e) {}
       window.addEventListener('message', (event) => { if (event.data?.type === 'OPER8ER_LEAD_DATA' && event.data?.data?.customerName) { leadData = event.data.data; updateSidebar(); } });
     }
