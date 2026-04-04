@@ -13,6 +13,9 @@ const PROXY_URL = 'https://oper8er-proxy-production.up.railway.app';
 
 export default defineBackground(() => {
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    // Health check — content script pings to verify service worker is alive
+    if (msg.type === 'PING') { sendResponse({ pong: true }); return false; }
+
     if (msg.type === 'GENERATE_OUTPUT') {
       handleGenerate(msg.payload)
         .then(sendResponse)
@@ -449,26 +452,61 @@ async function handleContextReply(payload: { image: string; direction: string })
   const dealerToken = settings.dealer_token || '';
   if (!dealerToken) throw new Error('No license key found.');
 
-  const resp = await fetch(`${PROXY_URL}/api/context-reply`, {
+  // Try dedicated endpoint first
+  try {
+    const resp = await fetch(`${PROXY_URL}/api/context-reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dealer_token: dealerToken,
+        image: payload.image,
+        direction: payload.direction,
+        rep_name: settings.rep_name || 'Unknown'
+      })
+    });
+
+    if (resp.status === 401) throw new Error('License invalid or expired.');
+    if (resp.status === 413) throw new Error('Screenshot too large — try a smaller crop');
+    if (resp.status === 429) throw new Error('Too many requests. Wait a few seconds.');
+    // If 403 (tier gate) or other error, fall through to vision fallback
+    if (resp.ok) return await resp.json();
+  } catch(e: any) {
+    if (e.message.includes('License') || e.message.includes('Too many')) throw e;
+    // Fall through to fallback
+  }
+
+  // Fallback: use /v1/generate with vision content blocks
+  const imageMediaType = payload.image.startsWith('data:image/png') ? 'image/png' : 'image/jpeg';
+  const base64Data = payload.image.replace(/^data:image\/\w+;base64,/, '');
+
+  const resp = await fetch(`${PROXY_URL}/v1/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       dealer_token: dealerToken,
-      image: payload.image,
-      direction: payload.direction,
-      rep_name: settings.rep_name || 'Unknown'
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: imageMediaType, data: base64Data } },
+          { type: 'text', text: `Look at this screenshot of a conversation. ${payload.direction}\n\nGenerate a natural reply based on what you see in the screenshot. Keep it conversational and direct.` }
+        ]
+      }],
+      max_tokens: 800,
+      model: 'claude-sonnet-4-20250514',
+      platform: 'context_reply'
     })
   });
 
-  if (resp.status === 401) throw new Error('License invalid or expired.');
-  if (resp.status === 403) throw new Error('Context Reply requires Floq Command or Group tier.');
-  if (resp.status === 429) throw new Error('Too many requests. Wait a few seconds.');
+  if (resp.status === 413) throw new Error('Screenshot too large — try a smaller crop');
   if (!resp.ok) {
-    const errBody = await resp.json().catch(() => ({ error: 'Unknown error' }));
+    const errBody = await resp.json().catch(() => ({ error: `Server error ${resp.status}` }));
     throw new Error(errBody.error || `Error: ${resp.status}`);
   }
 
-  return await resp.json();
+  const data = await resp.json();
+  const text = data.content?.[0]?.text || '';
+  if (!text) throw new Error('Empty response. Try again.');
+  return { reply: text };
 }
 
 // ===== VOICE REPLY (transcription → generate) =====

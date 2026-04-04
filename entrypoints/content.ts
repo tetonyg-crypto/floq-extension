@@ -45,7 +45,7 @@ export default defineContentScript({
   allFrames: true,
   runAt: 'document_idle',
 
-  main() {
+  async main() {
     console.log('[Floq] Content script loaded on', PLATFORM, window.location.href);
     if (PLATFORM === 'unknown') return;
 
@@ -100,6 +100,29 @@ export default defineContentScript({
     }
     async function isFeatureUnlocked(_feature: string): Promise<boolean> {
       return true; // Demo build: all features unlocked
+    }
+
+    // ===== BUG FIX 1: Safe message sender with reconnect =====
+    async function safeSend(msg: any): Promise<any> {
+      try {
+        // Ping first to check if service worker is alive
+        await browser.runtime.sendMessage({ type: 'PING' });
+      } catch(e: any) {
+        // Service worker dead — show reconnect prompt
+        throw new Error('Floq lost connection. Reload this page to reconnect.');
+      }
+      return browser.runtime.sendMessage(msg);
+    }
+
+    function showReconnectBanner(shadow: ShadowRoot) {
+      const existing = shadow.getElementById('floq-reconnect'); if (existing) return;
+      const banner = document.createElement('div'); banner.id = 'floq-reconnect';
+      banner.innerHTML = `<div style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;padding:10px;margin:8px;text-align:center;font-size:12px;font-family:system-ui">
+        <div style="font-weight:600;color:#92400E;margin-bottom:6px">Floq needs a refresh</div>
+        <button id="floq-reload-btn" style="padding:4px 16px;background:#7F77DD;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer">Reload Page</button>
+      </div>`;
+      shadow.getElementById('o8')?.prepend(banner);
+      shadow.getElementById('floq-reload-btn')?.addEventListener('click', () => window.location.reload());
     }
 
     // ===== VINSOLUTIONS SCANNING =====
@@ -161,29 +184,99 @@ export default defineContentScript({
       return { customerName: name, phone, email, vehicle, source, status, lastContact };
     }
 
-    const bodyText = document.body?.innerText || '';
-    const isUIFrame = bodyText.length > 2000 || !isVinSolutions;
+    // Only inject in top frame — scanning, sidebar, pill all belong to the top frame only
+    if (window !== window.top) return;
 
+    // ===== FIX 6: HARD GUARD — never inject twice =====
+    if (document.getElementById('floq-sidebar')) return;
+    if (document.getElementById('oper8er-host')) return;
+
+    // ===== FIX 1: Wait for VinSolutions page to be ready =====
     if (isVinSolutions) {
+      const waitForReady = () => new Promise<void>((resolve) => {
+        const check = () => {
+          const hasContent = document.querySelector('iframe') || document.body.innerText.length > 100;
+          if (hasContent && document.readyState === 'complete') {
+            resolve();
+          } else {
+            setTimeout(check, 500);
+          }
+        };
+        if (document.readyState === 'complete') {
+          setTimeout(check, 1000);
+        } else {
+          window.addEventListener('load', () => setTimeout(check, 1000));
+        }
+      });
+      await waitForReady();
+    }
+
+    // Clean stale markers from failed SPA injects
+    if (isFacebook || isInstagram) {
+      const staleMarker = document.getElementById('floq-sidebar');
+      const staleHost = document.getElementById('oper8er-host');
+      if (staleMarker && !staleHost) staleMarker.remove();
+    }
+    if (document.getElementById('floq-sidebar')) return;
+    if (document.getElementById('oper8er-host')) return;
+
+    console.log(`[Floq] Injection proceeding — platform: ${PLATFORM}, isTop: ${window === window.top}`);
+
+    // ===== VINSOLUTIONS SCANNING (top frame only, anchored to Customer Dashboard) =====
+    if (isVinSolutions) {
+      // Gather text from page + all accessible iframes
+      function gatherAllText(): string {
+        let text = document.body?.innerText || '';
+        const iframes = document.querySelectorAll('iframe');
+        for (const iframe of iframes) {
+          try {
+            const doc = iframe.contentDocument || (iframe as any).contentWindow?.document;
+            if (doc?.body) text += '\n' + doc.body.innerText;
+          } catch(e) {}
+        }
+        return text;
+      }
+
+      // Extract ONLY the text after "Customer Dashboard" heading to avoid picking up
+      // names from the left lead list panel. Everything before that marker is ignored.
+      function getDashboardScopedText(): string {
+        const full = gatherAllText();
+        const idx = full.search(/Customer Dashboard/i);
+        if (idx === -1) return '';
+        return full.slice(idx);
+      }
+
       function attemptScan() {
-        const t = document.body?.innerText || '';
-        if (t.length < 50) return;
-        const s = scanText(t);
+        const dashText = getDashboardScopedText();
+        if (!dashText || dashText.length < 30) return;
+        // Name/phone/email come from dashboard-scoped text only
+        const s = scanText(dashText);
+        // Vehicle can also come from broader page context
+        if (!s.vehicle) {
+          const allText = gatherAllText();
+          s.vehicle = extractVehicle(allText) || null;
+        }
         if (s.customerName) browser.storage.local.set({ oper8er_lead: s, oper8er_lead_time: Date.now() });
-        const v = extractVehicle(t);
-        if (v) browser.storage.local.set({ oper8er_vehicle_info: v, oper8er_vehicle_info_time: Date.now() });
+        if (s.vehicle) browser.storage.local.set({ oper8er_vehicle_info: s.vehicle, oper8er_vehicle_info_time: Date.now() });
       }
       attemptScan();
       let lastScannedName = '';
       setInterval(() => {
-        const t = document.body?.innerText || '';
-        const nm = t.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || t.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
+        const dashText = getDashboardScopedText();
+        const nm = dashText.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || dashText.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
         const curName = nm ? nm[1].trim() : '';
         if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
       }, 2000);
-    }
 
-    if (isVinSolutions && isUIFrame) {
+      const vinObserver = new MutationObserver(() => {
+        const dashText = getDashboardScopedText();
+        const nm = dashText.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || dashText.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
+        const curName = nm ? nm[1].trim() : '';
+        if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
+      });
+      vinObserver.observe(document.body, { childList: true, subtree: true });
+
+      // Poll storage for lead data and update sidebar
       setInterval(async () => {
         try {
           const r = await browser.storage.local.get(['oper8er_lead', 'oper8er_lead_time', 'oper8er_vehicle_info', 'oper8er_vehicle_info_time']);
@@ -194,71 +287,135 @@ export default defineContentScript({
       }, 2000);
     }
 
-    // Non-VinSolutions: only inject in top frame
-    if (!isVinSolutions && window !== window.top) return;
-    // VinSolutions: PILL ONLY IN TOP FRAME — scanning runs in iframes, pill does not
-    if (isVinSolutions && window !== window.top) return;
-    // Removed bodyText.length < 500 guard — VinSolutions top frame is often a thin shell
-    // with all content in iframes, so the pill must inject regardless of body text length
-    console.log(`[Floq] Pill injection proceeding — platform: ${PLATFORM}, isTop: ${window === window.top}, bodyLen: ${bodyText.length}`);
-
     // ===== SIDEBAR WIDTH PER PLATFORM =====
     function getSidebarWidth(): string {
       if (isGmail || isInstagram) return '280px';
+      if (isVinSolutions) return '320px';
       return '300px';
     }
 
-    // ===== PILL CREATION (extracted as function for SPA re-injection) =====
-    function createPill() {
-      // Guard: don't double-inject
-      if (document.getElementById('oper8er-pill')) return;
-      if (document.getElementById('floq-sidebar')) return;
-      if (document.getElementById('oper8er-host')) return;
+    // ===== PILL — draggable, position saved to storage =====
+    let pill: HTMLElement | null = document.createElement('div');
+    pill.id = 'oper8er-pill';
+    pill.textContent = '⚡ FQ';
 
-      // Clean stale markers from failed SPA injects
-      if (isFacebook || isInstagram) {
-        const staleMarker = document.getElementById('floq-sidebar');
-        const staleHost = document.getElementById('oper8er-host');
-        if (staleMarker && !staleHost) staleMarker.remove();
+    // Default position — can be overridden by saved position
+    Object.assign(pill.style, {
+      position:'fixed', right:'16px', top:'50%', zIndex:'2147483646',
+      background:'#7F77DD', color:'#fff', padding:'8px 12px', borderRadius:'8px',
+      fontSize:'12px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'grab',
+      boxShadow:'0 2px 12px rgba(127,119,221,0.35)', letterSpacing:'0.5px', opacity:'0.9',
+      transition:'opacity 0.15s', userSelect:'none', touchAction:'none'
+    });
+
+    // Load saved position from storage
+    browser.storage.local.get(['floq_pill_x', 'floq_pill_y']).then(saved => {
+      if (pill && saved.floq_pill_x !== undefined && saved.floq_pill_y !== undefined) {
+        pill.style.left = saved.floq_pill_x + 'px';
+        pill.style.top = saved.floq_pill_y + 'px';
+        pill.style.right = 'auto';
       }
+    }).catch(() => {});
 
-      const pill = document.createElement('div');
-      pill.id = 'oper8er-pill';
-      pill.textContent = '⚡ FQ';
-      const pillSide = isGmail ? 'left' : 'right';
-      const pillRadius = isGmail ? '0 6px 6px 0' : '6px 0 0 6px';
-      Object.assign(pill.style, {
-        position:'fixed', [pillSide]:'0', top:'50%', transform:'translateY(-50%)', zIndex:'2147483646',
-        background:'#7F77DD', color:'#fff', padding:'6px 8px 6px 6px', borderRadius: pillRadius,
-        fontSize:'11px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'pointer',
-        boxShadow:'0 2px 8px rgba(127,119,221,0.25)', letterSpacing:'0.5px', opacity:'0.85',
-        transition:'opacity 0.15s, padding 0.15s'
-      });
-      pill.onmouseenter = () => { pill.style.opacity = '1'; pill.style.padding = '8px 12px 8px 10px'; pill.textContent = '⚡ Floq'; };
-      pill.onmouseleave = () => { pill.style.opacity = '0.85'; pill.style.padding = '6px 8px 6px 6px'; pill.textContent = '⚡ FQ'; };
-      pill.onclick = () => { sidebarOpen ? closeSidebar() : openSidebar(); };
-      document.body.appendChild(pill);
-      console.log('[Floq] Pill injected on', PLATFORM);
-    }
+    // Drag logic — distinguish drag from click
+    let isDragging = false;
+    let dragStartX = 0, dragStartY = 0;
+    let pillStartX = 0, pillStartY = 0;
+    let didDrag = false;
 
-    // ===== SPA OBSERVER for Facebook/Instagram =====
-    if ((isFacebook || isInstagram) && !document.querySelector('[role="main"], [data-testid="conversation"], [class*="messages"], [class*="messenger"], [class*="direct"]')) {
+    pill.addEventListener('mousedown', (e: MouseEvent) => {
+      if (!pill) return;
+      isDragging = true; didDrag = false;
+      dragStartX = e.clientX; dragStartY = e.clientY;
+      const rect = pill.getBoundingClientRect();
+      pillStartX = rect.left; pillStartY = rect.top;
+      pill.style.cursor = 'grabbing';
+      pill.style.transition = 'none'; // disable transitions during drag
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e: MouseEvent) => {
+      if (!isDragging || !pill) return;
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) didDrag = true;
+      if (didDrag) {
+        pill.style.left = (pillStartX + dx) + 'px';
+        pill.style.top = (pillStartY + dy) + 'px';
+        pill.style.right = 'auto';
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!isDragging || !pill) { isDragging = false; return; }
+      isDragging = false;
+      pill.style.cursor = 'grab';
+      pill.style.transition = 'opacity 0.15s';
+      if (didDrag) {
+        // Save position
+        const rect = pill.getBoundingClientRect();
+        browser.storage.local.set({ floq_pill_x: rect.left, floq_pill_y: rect.top });
+      }
+    });
+
+    pill.onmouseenter = () => { if(pill && !isDragging) { pill.style.opacity = '1'; pill.textContent = '⚡ Floq'; } };
+    pill.onmouseleave = () => { if(pill && !isDragging) { pill.style.opacity = '0.9'; pill.textContent = '⚡ FQ'; } };
+    pill.onclick = (e: MouseEvent) => { if (didDrag) { e.preventDefault(); return; } sidebarOpen ? closeSidebar() : openSidebar(); };
+    document.body.appendChild(pill);
+    console.log('[Floq] Pill injected on', PLATFORM);
+
+    // ===== SPA OBSERVER for Facebook/Instagram — re-inject pill if DOM rebuilds =====
+    if (isFacebook || isInstagram) {
       const target = document.querySelector('[role="main"]') || document.querySelector('[class*="x1n2onr6"]') || document.body;
       const spaObserver = new MutationObserver(() => {
-        if (document.getElementById('oper8er-pill')) return;
-        const container = document.querySelector('[role="main"], [data-testid="conversation"], [class*="messages"], [class*="messenger"], [class*="direct"]');
-        if (container) {
-          spaObserver.disconnect();
-          console.log('[Floq] SPA container detected, injecting pill');
-          createPill();
+        // If Facebook/Instagram SPA navigation destroyed the pill, re-inject it
+        if (!document.getElementById('oper8er-pill') && !document.getElementById('oper8er-host')) {
+          const container = document.querySelector('[role="main"], [data-testid="conversation"], [class*="messages"], [class*="messenger"], [class*="direct"]');
+          if (container) {
+            console.log('[Floq] SPA re-injection: pill was removed, re-creating');
+            pill = document.createElement('div');
+            pill.id = 'oper8er-pill';
+            pill.textContent = '⚡ FQ';
+            Object.assign(pill.style, {
+              position:'fixed', right:'16px', top:'50%', zIndex:'2147483646',
+              background:'#7F77DD', color:'#fff', padding:'8px 12px', borderRadius:'8px',
+              fontSize:'12px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'pointer',
+              boxShadow:'0 2px 12px rgba(127,119,221,0.35)', letterSpacing:'0.5px', opacity:'0.9',
+              transition:'opacity 0.15s', userSelect:'none'
+            });
+            pill.onclick = () => { sidebarOpen ? closeSidebar() : openSidebar(); };
+            pill.onmouseenter = () => { if(pill) { pill.style.opacity = '1'; pill.textContent = '⚡ Floq'; } };
+            pill.onmouseleave = () => { if(pill) { pill.style.opacity = '0.9'; pill.textContent = '⚡ FQ'; } };
+            document.body.appendChild(pill);
+          }
         }
       });
       spaObserver.observe(target, { childList: true, subtree: true });
-      setTimeout(() => spaObserver.disconnect(), 15000); // 15s timeout
+      // No timeout — keep watching for SPA navigation for the life of the page
     }
 
-    // ===== INITIAL PILL INJECTION =====
-    createPill();
+    // ===== FIX 7: VinSolutions SPA navigation observer =====
+    if (isVinSolutions) {
+      let lastVinUrl = window.location.href;
+      const vinUrlObserver = new MutationObserver(() => {
+        if (window.location.href !== lastVinUrl) {
+          lastVinUrl = window.location.href;
+          const existing = document.getElementById('oper8er-host');
+          if (existing) existing.remove();
+          const marker = document.getElementById('floq-sidebar');
+          if (marker) marker.remove();
+          sidebarRoot = null; sidebarOpen = false;
+          // Re-inject after page renders
+          setTimeout(() => { openSidebar(); }, 1500);
+        }
+      });
+      vinUrlObserver.observe(document.body, { childList: true, subtree: true });
+
+      // Auto-open sidebar on VinSolutions after page loads
+      setTimeout(() => {
+        if (!sidebarOpen) openSidebar();
+      }, 2000);
+    }
 
     // ===== PENDING NOTES BADGE (VinSolutions only) =====
     let pendingNotes: any[] = [];
@@ -267,7 +424,7 @@ export default defineContentScript({
 
     function refreshPendingBadge() {
       if (!isVinSolutions) return;
-      browser.runtime.sendMessage({ type: 'GET_PENDING_NOTES' }).then((resp: any) => {
+      safeSend({ type: 'GET_PENDING_NOTES' }).then((resp: any) => {
         pendingNotes = resp?.notes || [];
         if (pendingNotes.length > 0) {
           if (!pendingBadge) {
@@ -353,22 +510,93 @@ export default defineContentScript({
     }
 
     // ===== INLINE MIC =====
+    // Each mic instance gets its own isListening + recognition so they don't interfere
     function attachInlineMic(shadow: ShadowRoot, inputEl: HTMLTextAreaElement | HTMLInputElement, micBtn: HTMLElement) {
       const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (!SR) { micBtn.style.display = 'none'; return; }
-      let active = false; let recog: any = null;
+      let isListening = false;
+      let recognition: any = null;
+      let fullTranscript = '';
+
       micBtn.onclick = () => {
-        if (active) { active = false; if (recog) { recog.onend = null; try { recog.stop(); } catch(e) {} recog = null; } micBtn.classList.remove('mic-active'); return; }
+        if (isListening) {
+          // STOP — finalize transcript, clean up
+          isListening = false;
+          micBtn.classList.remove('mic-active');
+          if (recognition) { try { recognition.stop(); } catch(e) {} }
+          // Final transcript is already in the input from onresult
+          return;
+        }
+
+        // START
         try {
-          recog = new SR(); recog.continuous = true; recog.interimResults = true; recog.lang = 'en-US';
-          let finalText = '';
-          recog.onresult = (e: any) => { let interim = ''; for (let i = e.resultIndex; i < e.results.length; i++) { if (e.results[i].isFinal) finalText += e.results[i][0].transcript + ' '; else interim += e.results[i][0].transcript; } inputEl.value = finalText + interim; inputEl.dispatchEvent(new Event('input', { bubbles: true })); };
-          recog.onerror = () => { active = false; micBtn.classList.remove('mic-active'); showToast(shadow, 'Voice not available — type your message'); };
-          recog.onend = () => { if (active) { active = false; micBtn.classList.remove('mic-active'); } };
-          recog.start(); active = true; micBtn.classList.add('mic-active');
-          setTimeout(() => { if (active) { active = false; micBtn.classList.remove('mic-active'); if (recog) { try { recog.stop(); } catch(e) {} recog = null; } } }, 10000);
-        } catch(e) { micBtn.style.display = 'none'; showToast(shadow, 'Voice not available — type your message'); }
+          recognition = new SR();
+          recognition.continuous = true;
+          recognition.interimResults = true;
+          recognition.lang = 'en-US';
+          recognition.maxAlternatives = 1;
+          fullTranscript = inputEl.value; // preserve existing text
+
+          recognition.onresult = (e: any) => {
+            let transcript = fullTranscript;
+            for (let i = 0; i < e.results.length; i++) {
+              transcript += e.results[i][0].transcript;
+              if (e.results[i].isFinal) {
+                fullTranscript += e.results[i][0].transcript + ' ';
+              }
+            }
+            // Show final + interim combined
+            let display = fullTranscript;
+            for (let i = 0; i < e.results.length; i++) {
+              if (!e.results[i].isFinal) display += e.results[i][0].transcript;
+            }
+            inputEl.value = display;
+            inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+          };
+
+          recognition.onerror = (e: any) => {
+            if (e.error === 'aborted') return; // normal stop, ignore
+            isListening = false;
+            micBtn.classList.remove('mic-active');
+            showToast(shadow, 'Mic error — type your message');
+          };
+
+          // Auto-restart on silence instead of stopping
+          recognition.onend = () => {
+            if (isListening) {
+              try { recognition.start(); } catch(e) {
+                isListening = false;
+                micBtn.classList.remove('mic-active');
+              }
+            }
+          };
+
+          recognition.start();
+          isListening = true;
+          micBtn.classList.add('mic-active');
+        } catch(e) {
+          micBtn.style.display = 'none';
+          showToast(shadow, 'Voice not available — type your message');
+        }
       };
+    }
+
+    // ===== IMAGE COMPRESSION for Context Reply =====
+    function compressImage(base64: string, maxWidth: number = 800, quality: number = 0.7): Promise<string> {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const ratio = Math.min(maxWidth / img.width, 1);
+          canvas.width = img.width * ratio;
+          canvas.height = img.height * ratio;
+          const ctx = canvas.getContext('2d');
+          if (ctx) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = () => resolve(base64); // fallback to original if compression fails
+        img.src = base64;
+      });
     }
 
     function showToast(shadow: ShadowRoot, msg: string) {
@@ -377,15 +605,6 @@ export default defineContentScript({
       Object.assign(toast.style, { position:'fixed', bottom:'16px', left:'50%', transform:'translateX(-50%)', background:'#1a202c', color:'#fff', padding:'8px 16px', borderRadius:'6px', fontSize:'11px', fontWeight:'500', zIndex:'99', opacity:'1', transition:'opacity 0.3s' });
       shadow.getElementById('o8')?.appendChild(toast);
       setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 2500);
-    }
-
-    // ===== VIN MAIN CONTAINER for margin push =====
-    function getVinMainContainer(): HTMLElement | null {
-      if (!isVinSolutions) return null;
-      return document.querySelector('#mainAreaPanel') as HTMLElement
-        || document.querySelector('.main-content') as HTMLElement
-        || document.querySelector('#page-content') as HTMLElement
-        || document.querySelector('body') as HTMLElement;
     }
 
     // ===== SIDEBAR =====
@@ -407,7 +626,14 @@ export default defineContentScript({
         // Cross-platform compact: right side, auto height
         Object.assign(host.style, { position:'fixed', top:'0', right:'0', width: w, height:'auto', maxHeight:'100vh', zIndex:'2147483647' });
       } else {
-        Object.assign(host.style, { position:'fixed', top:'0', right:'0', width: w, height:'100vh', zIndex:'2147483647' });
+        // VinSolutions: flush left side
+        Object.assign(host.style, {
+          position:'fixed', left:'0', top:'0', margin:'0', padding:'0',
+          width:'320px', height:'100vh',
+          zIndex:'2147483647',
+          boxShadow:'2px 0 8px rgba(0,0,0,0.1)',
+          overflowY:'hidden', overflowX:'hidden'
+        });
       }
 
       const shadow = host.attachShadow({ mode: 'open' });
@@ -492,7 +718,7 @@ export default defineContentScript({
           const input = coachInput?.value.trim(); if (!input) return;
           coachBtn.textContent = 'Thinking...'; (coachBtn as any).disabled = true;
           try {
-            const resp = await browser.runtime.sendMessage({ type: 'COACH_ME', payload: { situation: input, vehicleContext: leadData?.vehicle || '' } });
+            const resp = await safeSend({ type: 'COACH_ME', payload: { situation: input, vehicleContext: leadData?.vehicle || '' } });
             const output = s.getElementById('o8-coach-output')!;
             output.innerHTML = resp.error ? '<div class="tool-result">' + esc(resp.error) + '</div>' : '<div class="tool-result"><strong>YOUR NEXT MOVE:</strong><br>' + esc(resp.coaching).replace(/\n/g, '<br>') + '</div>';
           } catch(e: any) { s.getElementById('o8-coach-output')!.innerHTML = '<div class="tool-result">' + esc(e.message) + '</div>'; }
@@ -508,7 +734,7 @@ export default defineContentScript({
       if (alertBtn) {
         alertBtn.addEventListener('click', async () => {
           const input = alertInput?.value.trim(); if (!input) return;
-          await browser.runtime.sendMessage({ type: 'SET_ALERT', payload: { task: input, alertTime: parseAlertTime(input) } });
+          try { await safeSend({ type: 'SET_ALERT', payload: { task: input, alertTime: parseAlertTime(input) } }); } catch(e: any) { if (e.message.includes('Reload') || e.message.includes('connection') || e.message.includes('invalidated')) { showReconnectBanner(s); } return; }
           alertInput.value = ''; loadAlerts(s);
         });
       }
@@ -524,7 +750,7 @@ export default defineContentScript({
           cmdExec.textContent = 'Processing...'; (cmdExec as any).disabled = true;
           const sa = s.getElementById('o8-cmd-status')!; sa.innerHTML = '';
           try {
-            const resp = await browser.runtime.sendMessage({ type: 'EXECUTE_COMMAND', payload: { command: input, currentUrl: window.location.href, vehicleContext: leadData?.vehicle || '' } });
+            const resp = await safeSend({ type: 'EXECUTE_COMMAND', payload: { command: input, currentUrl: window.location.href, vehicleContext: leadData?.vehicle || '' } });
             if (resp.error) sa.innerHTML = '<div class="tool-result" style="color:#FF3B30">' + esc(resp.error) + '</div>';
             else { const p = resp.parsed; if (p.content) { const injected = injectContent(p); sa.innerHTML = '<div class="tool-result">' + (injected ? 'Injected' : esc(p.content).replace(/\n/g, '<br>')) + '</div>'; } else sa.innerHTML = '<div class="tool-result">Done</div>'; }
           } catch(e: any) { sa.innerHTML = '<div class="tool-result" style="color:#FF3B30">' + esc(e.message) + '</div>'; }
@@ -548,11 +774,26 @@ export default defineContentScript({
       }
       if (s.getElementById('o8-ctx-remove')) s.getElementById('o8-ctx-remove')!.addEventListener('click', () => { contextImage = null; if (ctxPreview) ctxPreview.style.display = 'none'; if (dropZone) dropZone.style.display = 'flex'; updCtx(); });
       if (ctxDir) ctxDir.addEventListener('input', updCtx);
+      // BUG 3: Attach mic to context direction input
+      const ctxMic = s.getElementById('o8-ctx-mic');
+      if (ctxDir && ctxMic) attachInlineMic(s, ctxDir, ctxMic);
       if (ctxGen) {
         ctxGen.addEventListener('click', async () => {
           if (!contextImage || !ctxDir?.value.trim()) return;
-          ctxGen.textContent = 'Analyzing...'; ctxGen.disabled = true; if (ctxOut) ctxOut.innerHTML = '';
-          try { const resp = await browser.runtime.sendMessage({ type: 'CONTEXT_REPLY', payload: { image: contextImage, direction: ctxDir.value.trim() } }); if (resp.error) addOutput(s, 'Error', resp.error, 'o8-ctx-output'); else addOutput(s, 'REPLY', resp.reply || resp.raw || '', 'o8-ctx-output'); } catch(e: any) { addOutput(s, 'Error', e.message, 'o8-ctx-output'); }
+          ctxGen.textContent = 'Compressing...'; ctxGen.disabled = true; if (ctxOut) ctxOut.innerHTML = '';
+          try {
+            const compressed = await compressImage(contextImage, 800, 0.7);
+            ctxGen.textContent = 'Analyzing...';
+            const resp = await safeSend({ type: 'CONTEXT_REPLY', payload: { image: compressed, direction: ctxDir.value.trim() } });
+            if (resp.error) {
+              const msg = resp.error.includes('413') ? 'Screenshot too large — try a smaller crop' : resp.error;
+              addOutput(s, 'Error', msg, 'o8-ctx-output');
+            } else { addOutput(s, 'REPLY', resp.reply || resp.raw || '', 'o8-ctx-output'); }
+          } catch(e: any) {
+            if (e.message.includes('Reload') || e.message.includes('connection')) { showReconnectBanner(s); }
+            const msg = e.message.includes('413') ? 'Screenshot too large — try a smaller crop' : e.message;
+            addOutput(s, 'Error', msg, 'o8-ctx-output');
+          }
           ctxGen.textContent = 'Generate Reply'; ctxGen.disabled = false; updCtx();
         });
       }
@@ -561,12 +802,13 @@ export default defineContentScript({
     }
 
     function pushContent(open: boolean) {
-      const w = getSidebarWidth();
-      if (isVinSolutions) {
-        const main = getVinMainContainer();
-        if (main) main.style.marginRight = open ? w : '0';
-      }
-      // Gmail: overlay only, no margin push (FIX 3)
+      if (!isVinSolutions) return;
+      const target = document.querySelector('#mainAreaPanel') as HTMLElement
+        || document.querySelector('.main-content') as HTMLElement
+        || document.querySelector('#page-content') as HTMLElement
+        || document.body;
+      target.style.marginLeft = open ? '320px' : '';
+      target.style.transition = 'margin-left 0.2s';
     }
 
     function closeSidebar() {
@@ -581,7 +823,9 @@ export default defineContentScript({
       const card = s.getElementById('o8-card'); if (!card) return;
       if (leadData?.customerName) {
         card.style.display = 'block';
-        s.getElementById('o8-name')!.textContent = leadData.customerName;
+        const nameEl = s.getElementById('o8-name')!;
+        nameEl.textContent = leadData.customerName;
+        nameEl.style.fontStyle = 'normal'; nameEl.style.color = '#1a202c';
         const vehEl = s.getElementById('o8-vehicle')!;
         if (leadData.vehicle) { vehEl.textContent = leadData.vehicle; vehEl.style.fontStyle = 'normal'; vehEl.style.color = '#2563eb'; }
         else { vehEl.textContent = 'No vehicle selected'; vehEl.style.fontStyle = 'italic'; vehEl.style.color = '#94a3b8'; }
@@ -608,7 +852,14 @@ export default defineContentScript({
             refreshPendingBadge();
           });
         }
-      } else card.style.display = 'none';
+      } else {
+        card.style.display = 'block';
+        const nameEl = s.getElementById('o8-name')!;
+        nameEl.textContent = 'Open a customer record';
+        nameEl.style.fontStyle = 'italic'; nameEl.style.color = '#94a3b8';
+        s.getElementById('o8-vehicle')!.textContent = '';
+        s.getElementById('o8-meta')!.textContent = '';
+      }
     }
 
     // ===== GENERATE =====
@@ -630,14 +881,17 @@ export default defineContentScript({
       try { const stored = await browser.storage.local.get(['floq_tone', 'floq_goal']); tone = stored.floq_tone || 'professional'; goal = stored.floq_goal || 'close_deal'; } catch(e) {}
 
       try {
-        const response = await browser.runtime.sendMessage({
+        const response = await safeSend({
           type: 'GENERATE_OUTPUT',
           payload: { type, leadContext: leadData || {}, repInput: input + (leadData?.vehicle ? '' : '\n[SYSTEM: No vehicle of interest detected. Do not mention or invent a vehicle in the response.]'), repName: '', dealership: '', platform: PLATFORM, tone, goal,
             metadata: { workflow_type: type === 'all' ? 'all' : type, customer_name: leadData?.customerName || null, vehicle: leadData?.vehicle || null, email: leadData?.email || null } }
         });
         if (response.error) addOutput(s, 'Error', response.error);
         else { const sec = response.sections; if (selected.includes('text') && sec.text) addOutput(s, outputLabels.text, sec.text); if (selected.includes('email') && sec.email) addOutput(s, outputLabels.email, sec.email); if (selected.includes('crm') && sec.crm) addOutput(s, outputLabels.crm, sec.crm); if (!sec.text && !sec.email && !sec.crm) addOutput(s, 'OUTPUT', response.text || 'Generation returned empty.'); }
-      } catch (e: any) { addOutput(s, 'Error', e.message); }
+      } catch (e: any) {
+        if (e.message.includes('Reload') || e.message.includes('connection') || e.message.includes('invalidated')) { showReconnectBanner(s); }
+        addOutput(s, 'Error', e.message.includes('invalidated') ? 'Floq needs a refresh. Click Reload Page above.' : e.message);
+      }
       btn.textContent = 'Generate'; btn.disabled = false; btn.style.background = '#7F77DD'; isGenerating = false;
     }
 
@@ -801,7 +1055,7 @@ export default defineContentScript({
 
     function parseAlertTime(text: string): number { const now = Date.now(); const inMin = text.match(/in\s+(\d+)\s*min/i); if (inMin) return now + parseInt(inMin[1]) * 60000; const inHr = text.match(/in\s+(\d+)\s*hour/i); if (inHr) return now + parseInt(inHr[1]) * 3600000; const byTime = text.match(/(?:by|at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i); if (byTime) { let h = parseInt(byTime[1]); const m = byTime[2] ? parseInt(byTime[2]) : 0; const ampm = (byTime[3] || '').toLowerCase(); if (ampm === 'pm' && h < 12) h += 12; if (ampm === 'am' && h === 12) h = 0; if (!ampm && h < 7) h += 12; const d = new Date(); d.setHours(h, m, 0, 0); if (d.getTime() < now) d.setDate(d.getDate() + 1); return d.getTime(); } return now + 30 * 60000; }
 
-    async function loadAlerts(s: ShadowRoot) { const alerts = await browser.runtime.sendMessage({ type: 'GET_ALERTS' }); const list = s.getElementById('o8-alert-list'); if (!list) return; if (!alerts || alerts.length === 0) { list.innerHTML = '<div style="text-align:center;color:#94a3b8;font-size:12px;padding:12px">No active reminders</div>'; return; } list.innerHTML = alerts.map((a: any) => `<div class="alert-item"><span>${esc(a.task)}</span><span class="alert-time">${new Date(a.alertTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span><button class="alert-dismiss" data-id="${a.id}">&times;</button></div>`).join(''); list.querySelectorAll('.alert-dismiss').forEach(btn => { btn.addEventListener('click', async () => { const id = (btn as HTMLElement).dataset.id; if (id) { await browser.runtime.sendMessage({ type: 'DISMISS_ALERT', payload: { id } }); loadAlerts(s); } }); }); }
+    async function loadAlerts(s: ShadowRoot) { let alerts: any[] = []; try { alerts = await safeSend({ type: 'GET_ALERTS' }); } catch(e: any) { if (e.message.includes('Reload') || e.message.includes('connection') || e.message.includes('invalidated')) { showReconnectBanner(s); } return; } const list = s.getElementById('o8-alert-list'); if (!list) return; if (!alerts || alerts.length === 0) { list.innerHTML = '<div style="text-align:center;color:#94a3b8;font-size:12px;padding:12px">No active reminders</div>'; return; } list.innerHTML = alerts.map((a: any) => `<div class="alert-item"><span>${esc(a.task)}</span><span class="alert-time">${new Date(a.alertTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span><button class="alert-dismiss" data-id="${a.id}">&times;</button></div>`).join(''); list.querySelectorAll('.alert-dismiss').forEach(btn => { btn.addEventListener('click', async () => { const id = (btn as HTMLElement).dataset.id; if (id) { await browser.runtime.sendMessage({ type: 'DISMISS_ALERT', payload: { id } }); loadAlerts(s); } }); }); }
 
     function esc(s: string) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
@@ -831,7 +1085,7 @@ export default defineContentScript({
 
     function getHTML(): string {
       const badge = getBadge();
-      const customerCard = isVinSolutions ? `<div id="o8-card" class="card" style="display:none"><div id="o8-name" class="name"></div><div id="o8-vehicle" class="vehicle"></div><div id="o8-meta" class="meta"></div></div>` : '';
+      const customerCard = isVinSolutions ? `<div id="o8-card" class="card"><div id="o8-name" class="name" style="font-style:italic;color:#94a3b8">Open a customer record</div><div id="o8-vehicle" class="vehicle"></div><div id="o8-meta" class="meta"></div></div>` : '';
       const placeholder = isVinSolutions ? 'Describe the situation or tap the mic...' : isGmail ? 'Describe the email situation...' : isFacebook ? 'Describe the conversation...' : isLinkedIn ? 'Describe the LinkedIn interaction...' : isInstagram ? 'Describe the DM...' : 'Describe the situation...';
 
       return `
@@ -853,7 +1107,7 @@ export default defineContentScript({
       <button id="o8-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button>
     </div>
     <button id="o8-generate" class="gen-btn">Generate</button>
-    ${!isVinSolutions ? '<div class="inline-links"><button id="o8-tools-btn-inline" class="link-btn">Tools</button><span class="link-sep">|</span><button id="o8-settings-btn-inline" class="link-btn">Settings</button></div>' : ''}
+    <div class="inline-links"><button id="o8-tools-btn-inline" class="link-btn">Tools</button><span class="link-sep">|</span><button id="o8-settings-btn-inline" class="link-btn">Settings</button></div>
   </div>
   <div id="o8-outputs" class="outputs"></div>
 </div>
@@ -867,7 +1121,7 @@ export default defineContentScript({
   </div>
   <div id="tool-coach" class="tool-content" style="display:block"><div class="tool-section"><div class="input-wrap"><textarea id="o8-coach-input" class="main-input" placeholder="What did the customer just say?" rows="2"></textarea><button id="o8-coach-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><div class="coach-chips"><button class="coach-chip">Need to think about it</button><button class="coach-chip">Price too high</button><button class="coach-chip">Bad credit</button><button class="coach-chip">Spouse not here</button></div><button id="o8-coach-btn" class="gen-btn">Coach Me</button></div><div id="o8-coach-output" class="tool-output"></div></div>
   <div id="tool-alerts" class="tool-content" style="display:none"><div class="tool-section"><div class="input-wrap"><input id="o8-alert-input" class="main-input" placeholder="e.g. Move the Tacoma by noon" /><button id="o8-alert-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><button id="o8-alert-btn" class="gen-btn" style="background:#FF9500">Set Alert</button></div><div id="o8-alert-list" class="tool-output"></div></div>
-  <div id="tool-context" class="tool-content" style="display:none"><div class="tool-section"><div id="o8-ctx-dropzone" class="ctx-dropzone"><span>Drop screenshot or paste (Ctrl+V)</span></div><div id="o8-ctx-preview" class="ctx-preview" style="display:none"><img id="o8-ctx-img" class="ctx-img" /><button id="o8-ctx-remove" class="ctx-remove">&times;</button></div><textarea id="o8-ctx-direction" class="main-input" placeholder="What do you want to say?" rows="2"></textarea><button id="o8-ctx-generate" class="gen-btn" disabled>Generate Reply</button></div><div id="o8-ctx-output" class="tool-output"></div></div>
+  <div id="tool-context" class="tool-content" style="display:none"><div class="tool-section"><div id="o8-ctx-dropzone" class="ctx-dropzone"><span>Drop screenshot or paste (Ctrl+V)</span></div><div id="o8-ctx-preview" class="ctx-preview" style="display:none"><img id="o8-ctx-img" class="ctx-img" /><button id="o8-ctx-remove" class="ctx-remove">&times;</button></div><div class="input-wrap"><textarea id="o8-ctx-direction" class="main-input" placeholder="What do you want to say?" rows="2"></textarea><button id="o8-ctx-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><button id="o8-ctx-generate" class="gen-btn" disabled>Generate Reply</button></div><div id="o8-ctx-output" class="tool-output"></div></div>
   <div id="tool-command" class="tool-content" style="display:none"><div class="tool-section"><div class="input-wrap"><textarea id="o8-cmd-input" class="main-input" placeholder="Type a command..." rows="2"></textarea><button id="o8-cmd-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><button id="o8-cmd-execute" class="gen-btn">Execute</button></div><div id="o8-cmd-status" class="tool-output"></div></div>
 </div>
 <div id="o8-settings-panel" class="tools-panel" style="display:none">
@@ -885,7 +1139,7 @@ export default defineContentScript({
       return `
 * { margin:0; padding:0; box-sizing:border-box; }
 :host { all:initial; font-family:system-ui,-apple-system,sans-serif; font-size:13px; color:#1a202c; }
-#o8 { width:${width}; height:${isVinSolutions ? '100vh' : '480px'}; max-height:100vh; background:#fff; border-left:1px solid #e2e8f0; border-right:1px solid #e2e8f0; overflow-y:auto; overscroll-behavior:contain; box-shadow:0 0 16px rgba(0,0,0,0.06); display:flex; flex-direction:column; ${!isVinSolutions ? 'border-radius:0 0 8px 0;' : ''} }
+#o8 { width:${width}; height:${isVinSolutions ? '100vh' : '480px'}; max-height:100vh; background:#fff; ${isVinSolutions ? 'border-right:1px solid #e2e8f0;' : 'border-left:1px solid #e2e8f0; border-right:1px solid #e2e8f0;'} overflow-y:auto; overscroll-behavior:contain; ${isVinSolutions ? '' : 'box-shadow:0 0 16px rgba(0,0,0,0.06);'} display:flex; flex-direction:column; padding-bottom:${isVinSolutions ? '60px' : '0'}; ${!isVinSolutions ? 'border-radius:0 0 8px 0;' : ''} }
 .header { padding:10px 14px; border-bottom:1px solid #e8eaed; display:flex; align-items:center; gap:8px; flex-shrink:0; }
 .logo { font-size:14px; font-weight:800; color:#7F77DD; letter-spacing:3px; }
 .badge { font-size:9px; font-weight:600; padding:2px 8px; border-radius:10px; text-transform:uppercase; letter-spacing:0.5px; flex:1; text-align:center; }
@@ -930,9 +1184,9 @@ export default defineContentScript({
 .ctx-dropzone { border:2px dashed #7F77DD; border-radius:8px; background:#F0EFFF; padding:16px; text-align:center; font-size:11px; color:#7F77DD; display:flex; align-items:center; justify-content:center; min-height:60px; cursor:pointer; } .ctx-dropzone.dragover { background:#e8e4ff; }
 .ctx-preview { position:relative; text-align:center; margin-bottom:8px; } .ctx-img { max-width:180px; max-height:100px; border-radius:6px; border:1px solid #e2e8f0; } .ctx-remove { position:absolute; top:-6px; right:calc(50% - 96px); width:18px; height:18px; border-radius:50%; background:#FF3B30; color:#fff; border:none; font-size:11px; cursor:pointer; }
 .alert-item { display:flex; align-items:center; padding:6px 8px; background:#FFF7ED; border:1px solid #FBBF24; border-radius:6px; margin-bottom:4px; font-size:11px; gap:6px; } .alert-time { font-size:10px; color:#92400E; margin-left:auto; } .alert-dismiss { background:none; border:none; color:#94a3b8; cursor:pointer; font-size:14px; }
-.sidebar-footer { padding:8px 14px; border-top:1px solid #e8eaed; display:flex; align-items:center; gap:8px; flex-shrink:0; flex-wrap:wrap; }
-.tools-btn { background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:4px 10px; font-size:11px; font-weight:600; color:#64748b; cursor:pointer; font-family:inherit; } .tools-btn:hover { background:#F0EFFF; color:#7F77DD; border-color:#7F77DD; }
-.tcpa { width:100%; font-size:9px; color:#9CA3AF; line-height:1.3; margin-top:4px; }
+.sidebar-footer { position:sticky; bottom:0; padding:8px 16px; border-top:1px solid #2a2a3e; display:flex; align-items:center; gap:12px; flex-shrink:0; flex-wrap:wrap; background:#1a1a2e; z-index:10; }
+.tools-btn { background:rgba(127,119,221,0.15); border:1px solid rgba(127,119,221,0.3); border-radius:6px; padding:4px 10px; font-size:11px; font-weight:600; color:#c4c0f0; cursor:pointer; font-family:inherit; } .tools-btn:hover { background:rgba(127,119,221,0.3); color:#fff; border-color:#7F77DD; }
+.tcpa { width:100%; font-size:9px; color:#6b6b8a; line-height:1.3; margin-top:4px; }
 /* Settings */
 .settings-section { padding:16px 14px; } .settings-label { font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; margin-top:12px; }
 .settings-options { display:flex; flex-direction:column; gap:6px; position:relative; } .settings-options label { font-size:12px; color:#1a202c; display:flex; align-items:center; gap:6px; } .settings-options input[type="radio"] { accent-color:#7F77DD; }
@@ -940,7 +1194,7 @@ export default defineContentScript({
     }
 
     // ===== NETWORK INTERCEPTION (VinSolutions) =====
-    if (isVinSolutions && isUIFrame) {
+    if (isVinSolutions) {
       try { const script = document.createElement('script'); script.src = browser.runtime.getURL('oper8er-intercept.js'); (document.head || document.documentElement).appendChild(script); script.onload = () => script.remove(); } catch(e) {}
       window.addEventListener('message', (event) => { if (event.data?.type === 'OPER8ER_LEAD_DATA' && event.data?.data?.customerName) { leadData = event.data.data; updateSidebar(); } });
     }
