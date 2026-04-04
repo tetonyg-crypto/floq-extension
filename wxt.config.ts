@@ -21,7 +21,7 @@ export default defineConfig({
         description: 'Open Floq Command Mode'
       }
     },
-    permissions: ['activeTab', 'storage'],
+    permissions: ['activeTab', 'storage', 'alarms'],
     web_accessible_resources: [{
       resources: ['voice.html', 'oper8er-intercept.js'],
       matches: [
@@ -38,6 +38,9 @@ export default defineConfig({
     host_permissions: [
       '*://*.vinsolutions.com/*',
       '*://vinsolutions.app.coxautoinc.com/*',
+      '*://www.facebook.com/*',
+      '*://www.instagram.com/*',
+      '*://www.messenger.com/*',
       'https://oper8er-proxy-production.up.railway.app/*',
       'https://mqnmemnogbotgmsmqfie.supabase.co/*'
     ],

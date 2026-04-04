@@ -92,14 +92,20 @@ export default defineContentScript({
     let sidebarOpen = false;
     let sidebarRoot: HTMLElement | null = null;
     let isGenerating = false;
-    let currentTier = 'group'; // Demo build: everything unlocked
+    let currentTier = 'floor';
 
     async function getTier(): Promise<string> {
-      currentTier = 'group';
-      return 'group';
+      try {
+        const resp = await browser.runtime.sendMessage({ type: 'CHECK_FEATURES' });
+        currentTier = resp?.tier || 'floor';
+        return currentTier;
+      } catch(e) { return 'floor'; }
     }
-    async function isFeatureUnlocked(_feature: string): Promise<boolean> {
-      return true; // Demo build: all features unlocked
+    async function isFeatureUnlocked(feature: string): Promise<boolean> {
+      try {
+        const resp = await browser.runtime.sendMessage({ type: 'CHECK_FEATURES' });
+        return resp?.features?.[feature] || false;
+      } catch(e) { return false; }
     }
 
     // ===== BUG FIX 1: Safe message sender with reconnect =====
@@ -261,22 +267,22 @@ export default defineContentScript({
       }
       attemptScan();
       let lastScannedName = '';
-      setInterval(() => {
-        const dashText = getDashboardScopedText();
-        const nm = dashText.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || dashText.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
-        const curName = nm ? nm[1].trim() : '';
-        if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
-      }, 2000);
 
+      // Debounced MutationObserver replaces setInterval for lead scanning
+      let scanTimeout: ReturnType<typeof setTimeout> | null = null;
       const vinObserver = new MutationObserver(() => {
-        const dashText = getDashboardScopedText();
-        const nm = dashText.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || dashText.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
-        const curName = nm ? nm[1].trim() : '';
-        if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
+        if (scanTimeout) clearTimeout(scanTimeout);
+        scanTimeout = setTimeout(() => {
+          const dashText = getDashboardScopedText();
+          const nm = dashText.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || dashText.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
+          const curName = nm ? nm[1].trim() : '';
+          if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
+        }, 500);
       });
-      vinObserver.observe(document.body, { childList: true, subtree: true });
+      const mainPanel = document.querySelector('#mainAreaPanel') || document.body;
+      vinObserver.observe(mainPanel, { childList: true, subtree: true, characterData: true });
 
-      // Poll storage for lead data and update sidebar
+      // Storage polling for cross-iframe lead data sync (iframes write, top frame reads)
       setInterval(async () => {
         try {
           const r = await browser.storage.local.get(['oper8er_lead', 'oper8er_lead_time', 'oper8er_vehicle_info', 'oper8er_vehicle_info_time']);
@@ -284,7 +290,7 @@ export default defineContentScript({
           if (!lead.vehicle && r.oper8er_vehicle_info && r.oper8er_vehicle_info_time > Date.now() - 15000) { lead.vehicle = r.oper8er_vehicle_info; await browser.storage.local.set({ oper8er_lead: lead, oper8er_lead_time: Date.now() }); }
           if (lead.customerName !== leadData?.customerName || lead.vehicle !== leadData?.vehicle) { leadData = lead; updateSidebar(); }
         } catch(e) {}
-      }, 2000);
+      }, 3000);
     }
 
     // ===== SIDEBAR WIDTH PER PLATFORM =====
@@ -767,7 +773,13 @@ export default defineContentScript({
       const ctxGen = s.getElementById('o8-ctx-generate') as HTMLButtonElement;
       const ctxOut = s.getElementById('o8-ctx-output');
       function updCtx() { if (ctxGen) ctxGen.disabled = !contextImage || !ctxDir?.value.trim(); }
+      const MAX_IMAGE_SIZE = 4 * 1024 * 1024; // 4MB
       function setContextImage(dataUrl: string) {
+        // Check base64 size (~75% of string length)
+        if (dataUrl.length > MAX_IMAGE_SIZE * 1.37) {
+          showToast(s, 'Screenshot too large — try a smaller crop (max 4MB)');
+          return;
+        }
         contextImage = dataUrl;
         if (ctxImg) ctxImg.src = contextImage;
         if (ctxPreview) ctxPreview.style.display = 'block';

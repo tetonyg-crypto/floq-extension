@@ -31,8 +31,11 @@ export default defineBackground(() => {
     }
 
     if (msg.type === 'CHECK_FEATURES') {
-      // Demo build: always return group tier with all features unlocked
-      sendResponse({ tier: 'group', features: getTierFeatures('group') });
+      browser.storage.local.get(['floq_tier', 'floq_features', 'floq_last_heartbeat']).then(data => {
+        const stale = !data.floq_last_heartbeat || (Date.now() - data.floq_last_heartbeat > 30 * 60 * 1000);
+        const tier = stale ? 'floor' : (data.floq_tier || 'floor');
+        sendResponse({ tier, features: data.floq_features || getTierFeatures(tier) });
+      }).catch(() => sendResponse({ tier: 'floor', features: getTierFeatures('floor') }));
       return true;
     }
 
@@ -212,8 +215,8 @@ export default defineBackground(() => {
     }
   });
 
-  // ===== HEARTBEAT — fires every 5 minutes =====
-  setInterval(async () => {
+  // ===== HEARTBEAT + ALERTS via chrome.alarms (MV3 compliant) =====
+  async function sendHeartbeat() {
     try {
       const settings = await browser.storage.sync.get(['dealer_token', 'rep_name', 'dealership']);
       if (!settings.dealer_token) return;
@@ -230,45 +233,23 @@ export default defineBackground(() => {
           license_key: settings.dealer_token,
           rep_name: settings.rep_name || 'Unknown',
           dealership: settings.dealership || '',
-          extension_version: manifest.version || '1.7.0',
+          extension_version: manifest.version || '1.8.0',
           platform: platform,
           timestamp: new Date().toISOString()
         })
       });
       if (resp.ok) {
         const data = await resp.json();
-        // Demo build: always store group tier regardless of server response
-        await browser.storage.local.set({ floq_tier: 'group', floq_features: getTierFeatures('group'), floq_last_heartbeat: Date.now() });
+        // Store tier + features from heartbeat response
+        const tier = data.tier || 'floor';
+        await browser.storage.local.set({ floq_tier: tier, floq_features: data.features || getTierFeatures(tier), floq_last_heartbeat: Date.now() });
       }
     } catch(e) {
-      // Heartbeat failed — report error silently
       reportError('NETWORK_ERROR', `Heartbeat failed: ${(e as Error).message}`).catch(() => {});
     }
-  }, 5 * 60 * 1000); // 5 minutes
+  }
 
-  // Fire initial heartbeat after 10 seconds (let onboarding finish)
-  setTimeout(async () => {
-    try {
-      const settings = await browser.storage.sync.get(['dealer_token', 'rep_name', 'dealership']);
-      if (!settings.dealer_token) return;
-      const manifest = browser.runtime.getManifest();
-      await fetch(`${PROXY_URL}/api/heartbeat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          license_key: settings.dealer_token,
-          rep_name: settings.rep_name || 'Unknown',
-          dealership: settings.dealership || '',
-          extension_version: manifest.version || '1.7.0',
-          platform: 'startup',
-          timestamp: new Date().toISOString()
-        })
-      });
-    } catch(e) {}
-  }, 10000);
-
-  // Alert checker — runs every 60 seconds
-  setInterval(async () => {
+  async function checkAlerts() {
     const data = await browser.storage.local.get('floq_alerts');
     const alerts = data.floq_alerts || [];
     const now = Date.now();
@@ -278,19 +259,28 @@ export default defineBackground(() => {
       if (now >= alert.alertTime) {
         alert.fired = true;
         changed = true;
-        // Inject banner into all active tabs
         const tabs = await browser.tabs.query({ active: true });
         for (const tab of tabs) {
           if (tab.id) {
-            try {
-              await browser.tabs.sendMessage(tab.id, { type: 'SHOW_ALERT_BANNER', payload: { id: alert.id, task: alert.task } });
-            } catch(e) {}
+            try { await browser.tabs.sendMessage(tab.id, { type: 'SHOW_ALERT_BANNER', payload: { id: alert.id, task: alert.task } }); } catch(e) {}
           }
         }
       }
     }
     if (changed) await browser.storage.local.set({ floq_alerts: alerts });
-  }, 30000);
+  }
+
+  // Create alarms — survives service worker restarts
+  browser.alarms.create('floq-heartbeat', { periodInMinutes: 5 });
+  browser.alarms.create('floq-check-alerts', { periodInMinutes: 0.5 });
+
+  browser.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === 'floq-heartbeat') sendHeartbeat();
+    if (alarm.name === 'floq-check-alerts') checkAlerts();
+  });
+
+  // Fire initial heartbeat after 10 seconds
+  setTimeout(sendHeartbeat, 10000);
 
   browser.runtime.onInstalled.addListener((details) => {
     if (details.reason === 'install') {

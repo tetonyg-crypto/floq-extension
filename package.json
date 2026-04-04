@@ -4,14 +4,16 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "wxt build",
+    "dev": "wxt dev",
+    "zip": "wxt zip",
+    "test": "echo \"No tests yet\""
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.81.0",
     "@tailwindcss/postcss": "^4.2.2",
     "clsx": "^2.1.1",
     "lucide-react": "^1.7.0",
