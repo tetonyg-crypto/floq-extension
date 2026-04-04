@@ -45,7 +45,7 @@ export default defineContentScript({
   allFrames: true,
   runAt: 'document_idle',
 
-  main() {
+  async main() {
     console.log('[Floq] Content script loaded on', PLATFORM, window.location.href);
     if (PLATFORM === 'unknown') return;
 
@@ -194,41 +194,54 @@ export default defineContentScript({
       }, 2000);
     }
 
-    // Non-VinSolutions: only inject in top frame
-    if (!isVinSolutions && window !== window.top) return;
-    // VinSolutions: PILL ONLY IN TOP FRAME — scanning runs in iframes, pill does not
-    if (isVinSolutions && window !== window.top) return;
-    // Removed bodyText.length < 500 guard — VinSolutions top frame is often a thin shell
-    // with all content in iframes, so the pill must inject regardless of body text length
-    console.log(`[Floq] Pill injection proceeding — platform: ${PLATFORM}, isTop: ${window === window.top}, bodyLen: ${bodyText.length}`);
+    // Only inject in top frame
+    if (window !== window.top) return;
 
-    // FIX 5/6: SPA observer for Facebook/Instagram — wait for DM container
+    // ===== FIX 6: HARD GUARD — never inject twice =====
+    if (document.getElementById('floq-sidebar')) return;
+    if (document.getElementById('oper8er-host')) return;
+
+    // ===== FIX 1: Wait for VinSolutions page to be ready =====
+    if (isVinSolutions) {
+      const waitForReady = () => new Promise<void>((resolve) => {
+        const check = () => {
+          const hasContent = document.querySelector('iframe') || document.body.innerText.length > 100;
+          if (hasContent && document.readyState === 'complete') {
+            resolve();
+          } else {
+            setTimeout(check, 500);
+          }
+        };
+        if (document.readyState === 'complete') {
+          setTimeout(check, 1000);
+        } else {
+          window.addEventListener('load', () => setTimeout(check, 1000));
+        }
+      });
+      await waitForReady();
+    }
+
+    // ===== FIX 5/6: SPA observer for Facebook/Instagram =====
     if ((isFacebook || isInstagram) && !document.querySelector('[role="main"], [class*="direct"], [class*="message"]')) {
       const spaObserver = new MutationObserver(() => {
         if (document.querySelector('[role="main"], [class*="direct"], [class*="message"]')) {
           spaObserver.disconnect();
-          // Re-run injection logic now that the container exists
-          if (!document.getElementById('oper8er-pill')) {
-            console.log('[Floq] SPA container detected, injecting pill');
-            // Will fall through to pill injection below on next line
-          }
         }
       });
       spaObserver.observe(document.body, { childList: true, subtree: true });
-      setTimeout(() => spaObserver.disconnect(), 8000); // give up after 8s
+      setTimeout(() => spaObserver.disconnect(), 8000);
     }
 
-    // ===== INJECTION GUARD — clean stale markers first =====
-    // Facebook/Instagram SPA navigation can leave stale markers from failed injects
+    // Clean stale markers
     if (isFacebook || isInstagram) {
       const staleMarker = document.getElementById('floq-sidebar');
       const staleHost = document.getElementById('oper8er-host');
-      // If marker exists but host is hidden/removed, clean up
       if (staleMarker && !staleHost) staleMarker.remove();
     }
     if (document.getElementById('floq-sidebar')) return;
-    if (document.getElementById('oper8er-pill')) return;
     if (document.getElementById('oper8er-host')) return;
+
+    console.log(`[Floq] Injection proceeding — platform: ${PLATFORM}, isTop: ${window === window.top}`);
 
     // ===== SIDEBAR WIDTH PER PLATFORM =====
     function getSidebarWidth(): string {
@@ -236,24 +249,58 @@ export default defineContentScript({
       return '300px';
     }
 
-    // ===== PILL =====
-    const pill = document.createElement('div');
+    // ===== PILL — all platforms get a pill for toggle =====
+    let pill: HTMLElement | null = document.createElement('div');
     pill.id = 'oper8er-pill';
     pill.textContent = '⚡ FQ';
-    // Pill position: Gmail LEFT, all others RIGHT
-    const pillSide = isGmail ? 'left' : 'right';
-    const pillRadius = isGmail ? '0 6px 6px 0' : '6px 0 0 6px';
-    Object.assign(pill.style, {
-      position:'fixed', [pillSide]:'0', top:'50%', transform:'translateY(-50%)', zIndex:'2147483646',
-      background:'#7F77DD', color:'#fff', padding:'6px 8px 6px 6px', borderRadius: pillRadius,
-      fontSize:'11px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'pointer',
-      boxShadow:'0 2px 8px rgba(127,119,221,0.25)', letterSpacing:'0.5px', opacity:'0.85',
-      transition:'opacity 0.15s, padding 0.15s'
-    });
-    pill.onmouseenter = () => { pill.style.opacity = '1'; pill.style.padding = '8px 12px 8px 10px'; pill.textContent = '⚡ Floq'; };
-    pill.onmouseleave = () => { pill.style.opacity = '0.85'; pill.style.padding = '6px 8px 6px 6px'; pill.textContent = '⚡ FQ'; };
+
+    if (isVinSolutions) {
+      // VinSolutions: pill in the center gap between the two panels
+      Object.assign(pill.style, {
+        position:'fixed', left:'50%', top:'50%', transform:'translate(-50%, -50%)', zIndex:'2147483646',
+        background:'#7F77DD', color:'#fff', padding:'8px 14px', borderRadius:'8px',
+        fontSize:'12px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'pointer',
+        boxShadow:'0 4px 16px rgba(127,119,221,0.35)', letterSpacing:'0.5px', opacity:'0.9',
+        transition:'opacity 0.15s, transform 0.15s, padding 0.15s'
+      });
+    } else {
+      // Other platforms: edge pill
+      const pillSide = isGmail ? 'left' : 'right';
+      Object.assign(pill.style, {
+        position:'fixed', [pillSide]:'0', top:'50%', transform:'translateY(-50%)', zIndex:'2147483646',
+        background:'#7F77DD', color:'#fff', padding:'6px 8px 6px 6px', borderRadius: isGmail ? '0 6px 6px 0' : '6px 0 0 6px',
+        fontSize:'11px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'pointer',
+        boxShadow:'0 2px 8px rgba(127,119,221,0.25)', letterSpacing:'0.5px', opacity:'0.85',
+        transition:'opacity 0.15s, padding 0.15s'
+      });
+    }
+    pill.onmouseenter = () => { if(pill) { pill.style.opacity = '1'; pill.style.padding = '8px 16px'; pill.textContent = '⚡ Floq'; } };
+    pill.onmouseleave = () => { if(pill) { pill.style.opacity = '0.9'; pill.style.padding = isVinSolutions ? '8px 14px' : '6px 8px 6px 6px'; pill.textContent = '⚡ FQ'; } };
     pill.onclick = () => { sidebarOpen ? closeSidebar() : openSidebar(); };
     document.body.appendChild(pill);
+
+    // ===== FIX 7: VinSolutions SPA navigation observer =====
+    if (isVinSolutions) {
+      let lastVinUrl = window.location.href;
+      const vinUrlObserver = new MutationObserver(() => {
+        if (window.location.href !== lastVinUrl) {
+          lastVinUrl = window.location.href;
+          const existing = document.getElementById('oper8er-host');
+          if (existing) existing.remove();
+          const marker = document.getElementById('floq-sidebar');
+          if (marker) marker.remove();
+          sidebarRoot = null; sidebarOpen = false;
+          // Re-inject after page renders
+          setTimeout(() => { openSidebar(); }, 1500);
+        }
+      });
+      vinUrlObserver.observe(document.body, { childList: true, subtree: true });
+
+      // Auto-open sidebar on VinSolutions after page loads
+      setTimeout(() => {
+        if (!sidebarOpen) openSidebar();
+      }, 2000);
+    }
 
     // ===== PENDING NOTES BADGE (VinSolutions only) =====
     let pendingNotes: any[] = [];
@@ -402,7 +449,15 @@ export default defineContentScript({
         // Cross-platform compact: right side, auto height
         Object.assign(host.style, { position:'fixed', top:'0', right:'0', width: w, height:'auto', maxHeight:'100vh', zIndex:'2147483647' });
       } else {
-        Object.assign(host.style, { position:'fixed', top:'0', right:'0', width: w, height:'100vh', zIndex:'2147483647' });
+        // VinSolutions: floating panel centered on screen
+        Object.assign(host.style, {
+          position:'fixed', left:'50%', top:'50%', transform:'translate(-50%, -50%)',
+          width: w, height:'auto', maxHeight:'70vh',
+          zIndex:'999999', borderRadius:'12px',
+          border:'1px solid rgba(127,119,221,0.3)',
+          boxShadow:'0 8px 32px rgba(0,0,0,0.2)',
+          overflowY:'auto', overflowX:'hidden'
+        });
       }
 
       const shadow = host.attachShadow({ mode: 'open' });
@@ -559,7 +614,7 @@ export default defineContentScript({
       const w = getSidebarWidth();
       if (isVinSolutions) {
         const main = getVinMainContainer();
-        if (main) main.style.marginRight = open ? w : '0';
+        // Floating panel — no margin push
       }
       // Gmail: overlay only, no margin push (FIX 3)
     }
