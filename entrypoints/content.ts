@@ -450,21 +450,74 @@ export default defineContentScript({
     }
 
     // ===== INLINE MIC =====
+    // Each mic instance gets its own isListening + recognition so they don't interfere
     function attachInlineMic(shadow: ShadowRoot, inputEl: HTMLTextAreaElement | HTMLInputElement, micBtn: HTMLElement) {
       const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (!SR) { micBtn.style.display = 'none'; return; }
-      let active = false; let recog: any = null;
+      let isListening = false;
+      let recognition: any = null;
+      let fullTranscript = '';
+
       micBtn.onclick = () => {
-        if (active) { active = false; if (recog) { recog.onend = null; try { recog.stop(); } catch(e) {} recog = null; } micBtn.classList.remove('mic-active'); return; }
+        if (isListening) {
+          // STOP — finalize transcript, clean up
+          isListening = false;
+          micBtn.classList.remove('mic-active');
+          if (recognition) { try { recognition.stop(); } catch(e) {} }
+          // Final transcript is already in the input from onresult
+          return;
+        }
+
+        // START
         try {
-          recog = new SR(); recog.continuous = true; recog.interimResults = true; recog.lang = 'en-US';
-          let finalText = '';
-          recog.onresult = (e: any) => { let interim = ''; for (let i = e.resultIndex; i < e.results.length; i++) { if (e.results[i].isFinal) finalText += e.results[i][0].transcript + ' '; else interim += e.results[i][0].transcript; } inputEl.value = finalText + interim; inputEl.dispatchEvent(new Event('input', { bubbles: true })); };
-          recog.onerror = () => { active = false; micBtn.classList.remove('mic-active'); showToast(shadow, 'Voice not available — type your message'); };
-          recog.onend = () => { if (active) { active = false; micBtn.classList.remove('mic-active'); } };
-          recog.start(); active = true; micBtn.classList.add('mic-active');
-          setTimeout(() => { if (active) { active = false; micBtn.classList.remove('mic-active'); if (recog) { try { recog.stop(); } catch(e) {} recog = null; } } }, 10000);
-        } catch(e) { micBtn.style.display = 'none'; showToast(shadow, 'Voice not available — type your message'); }
+          recognition = new SR();
+          recognition.continuous = true;
+          recognition.interimResults = true;
+          recognition.lang = 'en-US';
+          recognition.maxAlternatives = 1;
+          fullTranscript = inputEl.value; // preserve existing text
+
+          recognition.onresult = (e: any) => {
+            let transcript = fullTranscript;
+            for (let i = 0; i < e.results.length; i++) {
+              transcript += e.results[i][0].transcript;
+              if (e.results[i].isFinal) {
+                fullTranscript += e.results[i][0].transcript + ' ';
+              }
+            }
+            // Show final + interim combined
+            let display = fullTranscript;
+            for (let i = 0; i < e.results.length; i++) {
+              if (!e.results[i].isFinal) display += e.results[i][0].transcript;
+            }
+            inputEl.value = display;
+            inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+          };
+
+          recognition.onerror = (e: any) => {
+            if (e.error === 'aborted') return; // normal stop, ignore
+            isListening = false;
+            micBtn.classList.remove('mic-active');
+            showToast(shadow, 'Mic error — type your message');
+          };
+
+          // Auto-restart on silence instead of stopping
+          recognition.onend = () => {
+            if (isListening) {
+              try { recognition.start(); } catch(e) {
+                isListening = false;
+                micBtn.classList.remove('mic-active');
+              }
+            }
+          };
+
+          recognition.start();
+          isListening = true;
+          micBtn.classList.add('mic-active');
+        } catch(e) {
+          micBtn.style.display = 'none';
+          showToast(shadow, 'Voice not available — type your message');
+        }
       };
     }
 
