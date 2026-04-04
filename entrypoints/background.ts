@@ -44,7 +44,47 @@ export default defineBackground(() => {
 
     if (msg.type === 'LOG_ACTION') {
       const p = msg.payload;
-      console.log(`[Oper8er] Action: ${p.action_type} | Success: ${p.success} | Customer: ${p.customer} | Vehicle: ${p.vehicle}`);
+      browser.storage.sync.get(['dealer_token', 'rep_name']).then(async (settings) => {
+        try {
+          await fetch(`${PROXY_URL}/api/log-action`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              dealer_token: settings.dealer_token || '',
+              action: p.action_type || 'unknown',
+              customer_name: p.customer || null,
+              vehicle: p.vehicle || null,
+              platform: p.platform || 'unknown',
+              rep_name: settings.rep_name || '',
+              success: p.success ?? true,
+              timestamp: new Date().toISOString()
+            })
+          });
+        } catch(e) { console.error('[Floq] Log action failed:', e); }
+      });
+      return false;
+    }
+
+    if (msg.type === 'LOG_COPY') {
+      const p = msg.payload;
+      browser.storage.sync.get(['dealer_token', 'rep_name']).then(async (settings) => {
+        try {
+          await fetch(`${PROXY_URL}/api/log-action`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              dealer_token: settings.dealer_token || '',
+              action: p.label || 'COPY',
+              customer_name: p.customer || null,
+              vehicle: p.vehicle || null,
+              platform: p.platform || 'unknown',
+              rep_name: settings.rep_name || '',
+              success: true,
+              timestamp: new Date().toISOString()
+            })
+          });
+        } catch(e) { console.error('[Floq] Log copy failed:', e); }
+      });
       return false;
     }
 
