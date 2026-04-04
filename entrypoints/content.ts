@@ -767,12 +767,34 @@ export default defineContentScript({
       const ctxGen = s.getElementById('o8-ctx-generate') as HTMLButtonElement;
       const ctxOut = s.getElementById('o8-ctx-output');
       function updCtx() { if (ctxGen) ctxGen.disabled = !contextImage || !ctxDir?.value.trim(); }
+      function setContextImage(dataUrl: string) {
+        contextImage = dataUrl;
+        if (ctxImg) ctxImg.src = contextImage;
+        if (ctxPreview) ctxPreview.style.display = 'block';
+        if (dropZone) dropZone.style.display = 'none';
+        updCtx();
+      }
       if (dropZone) {
         dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
         dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-        dropZone.addEventListener('drop', (e: any) => { e.preventDefault(); dropZone.classList.remove('dragover'); const f = e.dataTransfer?.files?.[0]; if (f?.type.startsWith('image/')) { const r = new FileReader(); r.onload = () => { contextImage = r.result as string; if (ctxImg) ctxImg.src = contextImage; if (ctxPreview) ctxPreview.style.display = 'block'; if (dropZone) dropZone.style.display = 'none'; updCtx(); }; r.readAsDataURL(f); } });
+        dropZone.addEventListener('drop', (e: any) => { e.preventDefault(); dropZone.classList.remove('dragover'); const f = e.dataTransfer?.files?.[0]; if (f?.type.startsWith('image/')) { const r = new FileReader(); r.onload = () => setContextImage(r.result as string); r.readAsDataURL(f); } });
       }
-      if (s.getElementById('o8-ctx-remove')) s.getElementById('o8-ctx-remove')!.addEventListener('click', () => { contextImage = null; if (ctxPreview) ctxPreview.style.display = 'none'; if (dropZone) dropZone.style.display = 'flex'; updCtx(); });
+      // Ctrl+V paste support for screenshots
+      document.addEventListener('paste', (e: ClipboardEvent) => {
+        // Only handle if context tab is visible
+        const ctxTab = s.getElementById('tool-context');
+        if (!ctxTab || ctxTab.style.display === 'none') return;
+        const item = Array.from(e.clipboardData?.items || []).find(i => i.type.startsWith('image/'));
+        if (!item) return;
+        const blob = item.getAsFile();
+        if (!blob) return;
+        const reader = new FileReader();
+        reader.onload = () => setContextImage(reader.result as string);
+        reader.readAsDataURL(blob);
+        e.preventDefault();
+      });
+      function clearContextImage() { contextImage = null; if (ctxPreview) ctxPreview.style.display = 'none'; if (dropZone) dropZone.style.display = 'flex'; updCtx(); }
+      if (s.getElementById('o8-ctx-remove')) s.getElementById('o8-ctx-remove')!.addEventListener('click', clearContextImage);
       if (ctxDir) ctxDir.addEventListener('input', updCtx);
       // BUG 3: Attach mic to context direction input
       const ctxMic = s.getElementById('o8-ctx-mic');
