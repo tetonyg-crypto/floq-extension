@@ -202,58 +202,63 @@ export default defineContentScript({
     // with all content in iframes, so the pill must inject regardless of body text length
     console.log(`[Floq] Pill injection proceeding — platform: ${PLATFORM}, isTop: ${window === window.top}, bodyLen: ${bodyText.length}`);
 
-    // FIX 5/6: SPA observer for Facebook/Instagram — wait for DM container
-    if ((isFacebook || isInstagram) && !document.querySelector('[role="main"], [class*="direct"], [class*="message"]')) {
-      const spaObserver = new MutationObserver(() => {
-        if (document.querySelector('[role="main"], [class*="direct"], [class*="message"]')) {
-          spaObserver.disconnect();
-          // Re-run injection logic now that the container exists
-          if (!document.getElementById('oper8er-pill')) {
-            console.log('[Floq] SPA container detected, injecting pill');
-            // Will fall through to pill injection below on next line
-          }
-        }
-      });
-      spaObserver.observe(document.body, { childList: true, subtree: true });
-      setTimeout(() => spaObserver.disconnect(), 8000); // give up after 8s
-    }
-
-    // ===== INJECTION GUARD — clean stale markers first =====
-    // Facebook/Instagram SPA navigation can leave stale markers from failed injects
-    if (isFacebook || isInstagram) {
-      const staleMarker = document.getElementById('floq-sidebar');
-      const staleHost = document.getElementById('oper8er-host');
-      // If marker exists but host is hidden/removed, clean up
-      if (staleMarker && !staleHost) staleMarker.remove();
-    }
-    if (document.getElementById('floq-sidebar')) return;
-    if (document.getElementById('oper8er-pill')) return;
-    if (document.getElementById('oper8er-host')) return;
-
     // ===== SIDEBAR WIDTH PER PLATFORM =====
     function getSidebarWidth(): string {
       if (isGmail || isInstagram) return '280px';
       return '300px';
     }
 
-    // ===== PILL =====
-    const pill = document.createElement('div');
-    pill.id = 'oper8er-pill';
-    pill.textContent = '⚡ FQ';
-    // Pill position: Gmail LEFT, all others RIGHT
-    const pillSide = isGmail ? 'left' : 'right';
-    const pillRadius = isGmail ? '0 6px 6px 0' : '6px 0 0 6px';
-    Object.assign(pill.style, {
-      position:'fixed', [pillSide]:'0', top:'50%', transform:'translateY(-50%)', zIndex:'2147483646',
-      background:'#7F77DD', color:'#fff', padding:'6px 8px 6px 6px', borderRadius: pillRadius,
-      fontSize:'11px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'pointer',
-      boxShadow:'0 2px 8px rgba(127,119,221,0.25)', letterSpacing:'0.5px', opacity:'0.85',
-      transition:'opacity 0.15s, padding 0.15s'
-    });
-    pill.onmouseenter = () => { pill.style.opacity = '1'; pill.style.padding = '8px 12px 8px 10px'; pill.textContent = '⚡ Floq'; };
-    pill.onmouseleave = () => { pill.style.opacity = '0.85'; pill.style.padding = '6px 8px 6px 6px'; pill.textContent = '⚡ FQ'; };
-    pill.onclick = () => { sidebarOpen ? closeSidebar() : openSidebar(); };
-    document.body.appendChild(pill);
+    // ===== PILL CREATION (extracted as function for SPA re-injection) =====
+    function createPill() {
+      // Guard: don't double-inject
+      if (document.getElementById('oper8er-pill')) return;
+      if (document.getElementById('floq-sidebar')) return;
+      if (document.getElementById('oper8er-host')) return;
+
+      // Clean stale markers from failed SPA injects
+      if (isFacebook || isInstagram) {
+        const staleMarker = document.getElementById('floq-sidebar');
+        const staleHost = document.getElementById('oper8er-host');
+        if (staleMarker && !staleHost) staleMarker.remove();
+      }
+
+      const pill = document.createElement('div');
+      pill.id = 'oper8er-pill';
+      pill.textContent = '⚡ FQ';
+      const pillSide = isGmail ? 'left' : 'right';
+      const pillRadius = isGmail ? '0 6px 6px 0' : '6px 0 0 6px';
+      Object.assign(pill.style, {
+        position:'fixed', [pillSide]:'0', top:'50%', transform:'translateY(-50%)', zIndex:'2147483646',
+        background:'#7F77DD', color:'#fff', padding:'6px 8px 6px 6px', borderRadius: pillRadius,
+        fontSize:'11px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'pointer',
+        boxShadow:'0 2px 8px rgba(127,119,221,0.25)', letterSpacing:'0.5px', opacity:'0.85',
+        transition:'opacity 0.15s, padding 0.15s'
+      });
+      pill.onmouseenter = () => { pill.style.opacity = '1'; pill.style.padding = '8px 12px 8px 10px'; pill.textContent = '⚡ Floq'; };
+      pill.onmouseleave = () => { pill.style.opacity = '0.85'; pill.style.padding = '6px 8px 6px 6px'; pill.textContent = '⚡ FQ'; };
+      pill.onclick = () => { sidebarOpen ? closeSidebar() : openSidebar(); };
+      document.body.appendChild(pill);
+      console.log('[Floq] Pill injected on', PLATFORM);
+    }
+
+    // ===== SPA OBSERVER for Facebook/Instagram =====
+    if ((isFacebook || isInstagram) && !document.querySelector('[role="main"], [data-testid="conversation"], [class*="messages"], [class*="messenger"], [class*="direct"]')) {
+      const target = document.querySelector('[role="main"]') || document.querySelector('[class*="x1n2onr6"]') || document.body;
+      const spaObserver = new MutationObserver(() => {
+        if (document.getElementById('oper8er-pill')) return;
+        const container = document.querySelector('[role="main"], [data-testid="conversation"], [class*="messages"], [class*="messenger"], [class*="direct"]');
+        if (container) {
+          spaObserver.disconnect();
+          console.log('[Floq] SPA container detected, injecting pill');
+          createPill();
+        }
+      });
+      spaObserver.observe(target, { childList: true, subtree: true });
+      setTimeout(() => spaObserver.disconnect(), 15000); // 15s timeout
+    }
+
+    // ===== INITIAL PILL INJECTION =====
+    createPill();
 
     // ===== PENDING NOTES BADGE (VinSolutions only) =====
     let pendingNotes: any[] = [];
