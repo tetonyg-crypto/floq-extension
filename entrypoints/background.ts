@@ -13,6 +13,9 @@ const PROXY_URL = 'https://oper8er-proxy-production.up.railway.app';
 
 export default defineBackground(() => {
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    // Health check — content script pings to verify service worker is alive
+    if (msg.type === 'PING') { sendResponse({ pong: true }); return false; }
+
     if (msg.type === 'GENERATE_OUTPUT') {
       handleGenerate(msg.payload)
         .then(sendResponse)

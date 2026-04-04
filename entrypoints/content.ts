@@ -102,6 +102,29 @@ export default defineContentScript({
       return true; // Demo build: all features unlocked
     }
 
+    // ===== BUG FIX 1: Safe message sender with reconnect =====
+    async function safeSend(msg: any): Promise<any> {
+      try {
+        // Ping first to check if service worker is alive
+        await browser.runtime.sendMessage({ type: 'PING' });
+      } catch(e: any) {
+        // Service worker dead — show reconnect prompt
+        throw new Error('Floq lost connection. Reload this page to reconnect.');
+      }
+      return browser.runtime.sendMessage(msg);
+    }
+
+    function showReconnectBanner(shadow: ShadowRoot) {
+      const existing = shadow.getElementById('floq-reconnect'); if (existing) return;
+      const banner = document.createElement('div'); banner.id = 'floq-reconnect';
+      banner.innerHTML = `<div style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;padding:10px;margin:8px;text-align:center;font-size:12px;font-family:system-ui">
+        <div style="font-weight:600;color:#92400E;margin-bottom:6px">Floq needs a refresh</div>
+        <button id="floq-reload-btn" style="padding:4px 16px;background:#7F77DD;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer">Reload Page</button>
+      </div>`;
+      shadow.getElementById('o8')?.prepend(banner);
+      shadow.getElementById('floq-reload-btn')?.addEventListener('click', () => window.location.reload());
+    }
+
     // ===== VINSOLUTIONS SCANNING =====
     const MAKES = 'Chevrolet|Chevy|Subaru|Toyota|Ford|Ram|Dodge|Jeep|GMC|Honda|Nissan|Hyundai|Kia|BMW|Mercedes|Buick|Cadillac|Lexus|Acura|Audi|Volvo|Mazda|Chrysler|Lincoln|Infiniti|Volkswagen|VW|Porsche|Tesla|Rivian';
     const STOP_WORDS = 'Created|Attempted|Contacted|Looking|Wants|Also|Stock|Source|Status|miles|General|Customer|Interested|Trade|lineup|options|inventory|Calculated|Equity|Payoff|hover|details|Bad|Sold|Active|Lost';
@@ -542,7 +565,7 @@ export default defineContentScript({
           const input = coachInput?.value.trim(); if (!input) return;
           coachBtn.textContent = 'Thinking...'; (coachBtn as any).disabled = true;
           try {
-            const resp = await browser.runtime.sendMessage({ type: 'COACH_ME', payload: { situation: input, vehicleContext: leadData?.vehicle || '' } });
+            const resp = await safeSend({ type: 'COACH_ME', payload: { situation: input, vehicleContext: leadData?.vehicle || '' } });
             const output = s.getElementById('o8-coach-output')!;
             output.innerHTML = resp.error ? '<div class="tool-result">' + esc(resp.error) + '</div>' : '<div class="tool-result"><strong>YOUR NEXT MOVE:</strong><br>' + esc(resp.coaching).replace(/\n/g, '<br>') + '</div>';
           } catch(e: any) { s.getElementById('o8-coach-output')!.innerHTML = '<div class="tool-result">' + esc(e.message) + '</div>'; }
@@ -574,7 +597,7 @@ export default defineContentScript({
           cmdExec.textContent = 'Processing...'; (cmdExec as any).disabled = true;
           const sa = s.getElementById('o8-cmd-status')!; sa.innerHTML = '';
           try {
-            const resp = await browser.runtime.sendMessage({ type: 'EXECUTE_COMMAND', payload: { command: input, currentUrl: window.location.href, vehicleContext: leadData?.vehicle || '' } });
+            const resp = await safeSend({ type: 'EXECUTE_COMMAND', payload: { command: input, currentUrl: window.location.href, vehicleContext: leadData?.vehicle || '' } });
             if (resp.error) sa.innerHTML = '<div class="tool-result" style="color:#FF3B30">' + esc(resp.error) + '</div>';
             else { const p = resp.parsed; if (p.content) { const injected = injectContent(p); sa.innerHTML = '<div class="tool-result">' + (injected ? 'Injected' : esc(p.content).replace(/\n/g, '<br>')) + '</div>'; } else sa.innerHTML = '<div class="tool-result">Done</div>'; }
           } catch(e: any) { sa.innerHTML = '<div class="tool-result" style="color:#FF3B30">' + esc(e.message) + '</div>'; }
@@ -598,11 +621,14 @@ export default defineContentScript({
       }
       if (s.getElementById('o8-ctx-remove')) s.getElementById('o8-ctx-remove')!.addEventListener('click', () => { contextImage = null; if (ctxPreview) ctxPreview.style.display = 'none'; if (dropZone) dropZone.style.display = 'flex'; updCtx(); });
       if (ctxDir) ctxDir.addEventListener('input', updCtx);
+      // BUG 3: Attach mic to context direction input
+      const ctxMic = s.getElementById('o8-ctx-mic');
+      if (ctxDir && ctxMic) attachInlineMic(s, ctxDir, ctxMic);
       if (ctxGen) {
         ctxGen.addEventListener('click', async () => {
           if (!contextImage || !ctxDir?.value.trim()) return;
           ctxGen.textContent = 'Analyzing...'; ctxGen.disabled = true; if (ctxOut) ctxOut.innerHTML = '';
-          try { const resp = await browser.runtime.sendMessage({ type: 'CONTEXT_REPLY', payload: { image: contextImage, direction: ctxDir.value.trim() } }); if (resp.error) addOutput(s, 'Error', resp.error, 'o8-ctx-output'); else addOutput(s, 'REPLY', resp.reply || resp.raw || '', 'o8-ctx-output'); } catch(e: any) { addOutput(s, 'Error', e.message, 'o8-ctx-output'); }
+          try { const resp = await safeSend({ type: 'CONTEXT_REPLY', payload: { image: contextImage, direction: ctxDir.value.trim() } }); if (resp.error) addOutput(s, 'Error', resp.error, 'o8-ctx-output'); else addOutput(s, 'REPLY', resp.reply || resp.raw || '', 'o8-ctx-output'); } catch(e: any) { if (e.message.includes('Reload') || e.message.includes('connection')) { showReconnectBanner(s); } addOutput(s, 'Error', e.message, 'o8-ctx-output'); }
           ctxGen.textContent = 'Generate Reply'; ctxGen.disabled = false; updCtx();
         });
       }
@@ -917,7 +943,7 @@ export default defineContentScript({
   </div>
   <div id="tool-coach" class="tool-content" style="display:block"><div class="tool-section"><div class="input-wrap"><textarea id="o8-coach-input" class="main-input" placeholder="What did the customer just say?" rows="2"></textarea><button id="o8-coach-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><div class="coach-chips"><button class="coach-chip">Need to think about it</button><button class="coach-chip">Price too high</button><button class="coach-chip">Bad credit</button><button class="coach-chip">Spouse not here</button></div><button id="o8-coach-btn" class="gen-btn">Coach Me</button></div><div id="o8-coach-output" class="tool-output"></div></div>
   <div id="tool-alerts" class="tool-content" style="display:none"><div class="tool-section"><div class="input-wrap"><input id="o8-alert-input" class="main-input" placeholder="e.g. Move the Tacoma by noon" /><button id="o8-alert-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><button id="o8-alert-btn" class="gen-btn" style="background:#FF9500">Set Alert</button></div><div id="o8-alert-list" class="tool-output"></div></div>
-  <div id="tool-context" class="tool-content" style="display:none"><div class="tool-section"><div id="o8-ctx-dropzone" class="ctx-dropzone"><span>Drop screenshot or paste (Ctrl+V)</span></div><div id="o8-ctx-preview" class="ctx-preview" style="display:none"><img id="o8-ctx-img" class="ctx-img" /><button id="o8-ctx-remove" class="ctx-remove">&times;</button></div><textarea id="o8-ctx-direction" class="main-input" placeholder="What do you want to say?" rows="2"></textarea><button id="o8-ctx-generate" class="gen-btn" disabled>Generate Reply</button></div><div id="o8-ctx-output" class="tool-output"></div></div>
+  <div id="tool-context" class="tool-content" style="display:none"><div class="tool-section"><div id="o8-ctx-dropzone" class="ctx-dropzone"><span>Drop screenshot or paste (Ctrl+V)</span></div><div id="o8-ctx-preview" class="ctx-preview" style="display:none"><img id="o8-ctx-img" class="ctx-img" /><button id="o8-ctx-remove" class="ctx-remove">&times;</button></div><div class="input-wrap"><textarea id="o8-ctx-direction" class="main-input" placeholder="What do you want to say?" rows="2"></textarea><button id="o8-ctx-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><button id="o8-ctx-generate" class="gen-btn" disabled>Generate Reply</button></div><div id="o8-ctx-output" class="tool-output"></div></div>
   <div id="tool-command" class="tool-content" style="display:none"><div class="tool-section"><div class="input-wrap"><textarea id="o8-cmd-input" class="main-input" placeholder="Type a command..." rows="2"></textarea><button id="o8-cmd-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button></div><button id="o8-cmd-execute" class="gen-btn">Execute</button></div><div id="o8-cmd-status" class="tool-output"></div></div>
 </div>
 <div id="o8-settings-panel" class="tools-panel" style="display:none">
