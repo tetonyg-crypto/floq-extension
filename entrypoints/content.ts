@@ -188,8 +188,21 @@ export default defineContentScript({
     const isUIFrame = bodyText.length > 2000 || !isVinSolutions;
 
     if (isVinSolutions) {
+      // Gather text from main document + all accessible iframes (right panel)
+      function gatherAllText(): string {
+        let text = document.body?.innerText || '';
+        const iframes = document.querySelectorAll('iframe');
+        for (const iframe of iframes) {
+          try {
+            const doc = iframe.contentDocument || (iframe as any).contentWindow?.document;
+            if (doc?.body) text += '\n' + doc.body.innerText;
+          } catch(e) {}
+        }
+        return text;
+      }
+
       function attemptScan() {
-        const t = document.body?.innerText || '';
+        const t = gatherAllText();
         if (t.length < 50) return;
         const s = scanText(t);
         if (s.customerName) browser.storage.local.set({ oper8er_lead: s, oper8er_lead_time: Date.now() });
@@ -198,12 +211,22 @@ export default defineContentScript({
       }
       attemptScan();
       let lastScannedName = '';
+      // Poll every 2 seconds for name changes
       setInterval(() => {
-        const t = document.body?.innerText || '';
+        const t = gatherAllText();
         const nm = t.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || t.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
         const curName = nm ? nm[1].trim() : '';
         if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
       }, 2000);
+
+      // MutationObserver on body to catch right-panel content changes instantly
+      const vinObserver = new MutationObserver(() => {
+        const t = gatherAllText();
+        const nm = t.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || t.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
+        const curName = nm ? nm[1].trim() : '';
+        if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
+      });
+      vinObserver.observe(document.body, { childList: true, subtree: true });
     }
 
     if (isVinSolutions && isUIFrame) {
@@ -278,9 +301,9 @@ export default defineContentScript({
     pill.textContent = '⚡ FQ';
 
     if (isVinSolutions) {
-      // VinSolutions: pill in the center gap between the two panels
+      // VinSolutions: pill at the seam between left lead list and right customer dashboard
       Object.assign(pill.style, {
-        position:'fixed', left:'50%', top:'50%', transform:'translate(-50%, -50%)', zIndex:'2147483646',
+        position:'fixed', left:'640px', top:'45%', zIndex:'2147483646',
         background:'#7F77DD', color:'#fff', padding:'8px 14px', borderRadius:'8px',
         fontSize:'12px', fontWeight:'700', fontFamily:'system-ui,sans-serif', cursor:'pointer',
         boxShadow:'0 4px 16px rgba(127,119,221,0.35)', letterSpacing:'0.5px', opacity:'0.9',
@@ -332,7 +355,7 @@ export default defineContentScript({
 
     function refreshPendingBadge() {
       if (!isVinSolutions) return;
-      browser.runtime.sendMessage({ type: 'GET_PENDING_NOTES' }).then((resp: any) => {
+      safeSend({ type: 'GET_PENDING_NOTES' }).then((resp: any) => {
         pendingNotes = resp?.notes || [];
         if (pendingNotes.length > 0) {
           if (!pendingBadge) {
@@ -472,14 +495,13 @@ export default defineContentScript({
         // Cross-platform compact: right side, auto height
         Object.assign(host.style, { position:'fixed', top:'0', right:'0', width: w, height:'auto', maxHeight:'100vh', zIndex:'2147483647' });
       } else {
-        // VinSolutions: floating panel centered on screen
+        // VinSolutions: fixed panel on right side
         Object.assign(host.style, {
-          position:'fixed', left:'50%', top:'50%', transform:'translate(-50%, -50%)',
-          width: w, height:'auto', maxHeight:'70vh',
-          zIndex:'999999', borderRadius:'12px',
-          border:'1px solid rgba(127,119,221,0.3)',
-          boxShadow:'0 8px 32px rgba(0,0,0,0.2)',
-          overflowY:'auto', overflowX:'hidden'
+          position:'fixed', right:'0', top:'0',
+          width:'320px', height:'100vh',
+          zIndex:'999999',
+          boxShadow:'-4px 0 16px rgba(0,0,0,0.12)',
+          overflowY:'hidden', overflowX:'hidden'
         });
       }
 
@@ -581,7 +603,7 @@ export default defineContentScript({
       if (alertBtn) {
         alertBtn.addEventListener('click', async () => {
           const input = alertInput?.value.trim(); if (!input) return;
-          await browser.runtime.sendMessage({ type: 'SET_ALERT', payload: { task: input, alertTime: parseAlertTime(input) } });
+          try { await safeSend({ type: 'SET_ALERT', payload: { task: input, alertTime: parseAlertTime(input) } }); } catch(e: any) { if (e.message.includes('Reload') || e.message.includes('connection') || e.message.includes('invalidated')) { showReconnectBanner(s); } return; }
           alertInput.value = ''; loadAlerts(s);
         });
       }
@@ -657,7 +679,9 @@ export default defineContentScript({
       const card = s.getElementById('o8-card'); if (!card) return;
       if (leadData?.customerName) {
         card.style.display = 'block';
-        s.getElementById('o8-name')!.textContent = leadData.customerName;
+        const nameEl = s.getElementById('o8-name')!;
+        nameEl.textContent = leadData.customerName;
+        nameEl.style.fontStyle = 'normal'; nameEl.style.color = '#1a202c';
         const vehEl = s.getElementById('o8-vehicle')!;
         if (leadData.vehicle) { vehEl.textContent = leadData.vehicle; vehEl.style.fontStyle = 'normal'; vehEl.style.color = '#2563eb'; }
         else { vehEl.textContent = 'No vehicle selected'; vehEl.style.fontStyle = 'italic'; vehEl.style.color = '#94a3b8'; }
@@ -684,7 +708,14 @@ export default defineContentScript({
             refreshPendingBadge();
           });
         }
-      } else card.style.display = 'none';
+      } else {
+        card.style.display = 'block';
+        const nameEl = s.getElementById('o8-name')!;
+        nameEl.textContent = 'Open a customer record';
+        nameEl.style.fontStyle = 'italic'; nameEl.style.color = '#94a3b8';
+        s.getElementById('o8-vehicle')!.textContent = '';
+        s.getElementById('o8-meta')!.textContent = '';
+      }
     }
 
     // ===== GENERATE =====
@@ -706,14 +737,17 @@ export default defineContentScript({
       try { const stored = await browser.storage.local.get(['floq_tone', 'floq_goal']); tone = stored.floq_tone || 'professional'; goal = stored.floq_goal || 'close_deal'; } catch(e) {}
 
       try {
-        const response = await browser.runtime.sendMessage({
+        const response = await safeSend({
           type: 'GENERATE_OUTPUT',
           payload: { type, leadContext: leadData || {}, repInput: input + (leadData?.vehicle ? '' : '\n[SYSTEM: No vehicle of interest detected. Do not mention or invent a vehicle in the response.]'), repName: '', dealership: '', platform: PLATFORM, tone, goal,
             metadata: { workflow_type: type === 'all' ? 'all' : type, customer_name: leadData?.customerName || null, vehicle: leadData?.vehicle || null, email: leadData?.email || null } }
         });
         if (response.error) addOutput(s, 'Error', response.error);
         else { const sec = response.sections; if (selected.includes('text') && sec.text) addOutput(s, outputLabels.text, sec.text); if (selected.includes('email') && sec.email) addOutput(s, outputLabels.email, sec.email); if (selected.includes('crm') && sec.crm) addOutput(s, outputLabels.crm, sec.crm); if (!sec.text && !sec.email && !sec.crm) addOutput(s, 'OUTPUT', response.text || 'Generation returned empty.'); }
-      } catch (e: any) { addOutput(s, 'Error', e.message); }
+      } catch (e: any) {
+        if (e.message.includes('Reload') || e.message.includes('connection') || e.message.includes('invalidated')) { showReconnectBanner(s); }
+        addOutput(s, 'Error', e.message.includes('invalidated') ? 'Floq needs a refresh. Click Reload Page above.' : e.message);
+      }
       btn.textContent = 'Generate'; btn.disabled = false; btn.style.background = '#7F77DD'; isGenerating = false;
     }
 
@@ -877,7 +911,7 @@ export default defineContentScript({
 
     function parseAlertTime(text: string): number { const now = Date.now(); const inMin = text.match(/in\s+(\d+)\s*min/i); if (inMin) return now + parseInt(inMin[1]) * 60000; const inHr = text.match(/in\s+(\d+)\s*hour/i); if (inHr) return now + parseInt(inHr[1]) * 3600000; const byTime = text.match(/(?:by|at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i); if (byTime) { let h = parseInt(byTime[1]); const m = byTime[2] ? parseInt(byTime[2]) : 0; const ampm = (byTime[3] || '').toLowerCase(); if (ampm === 'pm' && h < 12) h += 12; if (ampm === 'am' && h === 12) h = 0; if (!ampm && h < 7) h += 12; const d = new Date(); d.setHours(h, m, 0, 0); if (d.getTime() < now) d.setDate(d.getDate() + 1); return d.getTime(); } return now + 30 * 60000; }
 
-    async function loadAlerts(s: ShadowRoot) { const alerts = await browser.runtime.sendMessage({ type: 'GET_ALERTS' }); const list = s.getElementById('o8-alert-list'); if (!list) return; if (!alerts || alerts.length === 0) { list.innerHTML = '<div style="text-align:center;color:#94a3b8;font-size:12px;padding:12px">No active reminders</div>'; return; } list.innerHTML = alerts.map((a: any) => `<div class="alert-item"><span>${esc(a.task)}</span><span class="alert-time">${new Date(a.alertTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span><button class="alert-dismiss" data-id="${a.id}">&times;</button></div>`).join(''); list.querySelectorAll('.alert-dismiss').forEach(btn => { btn.addEventListener('click', async () => { const id = (btn as HTMLElement).dataset.id; if (id) { await browser.runtime.sendMessage({ type: 'DISMISS_ALERT', payload: { id } }); loadAlerts(s); } }); }); }
+    async function loadAlerts(s: ShadowRoot) { let alerts: any[] = []; try { alerts = await safeSend({ type: 'GET_ALERTS' }); } catch(e: any) { if (e.message.includes('Reload') || e.message.includes('connection') || e.message.includes('invalidated')) { showReconnectBanner(s); } return; } const list = s.getElementById('o8-alert-list'); if (!list) return; if (!alerts || alerts.length === 0) { list.innerHTML = '<div style="text-align:center;color:#94a3b8;font-size:12px;padding:12px">No active reminders</div>'; return; } list.innerHTML = alerts.map((a: any) => `<div class="alert-item"><span>${esc(a.task)}</span><span class="alert-time">${new Date(a.alertTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span><button class="alert-dismiss" data-id="${a.id}">&times;</button></div>`).join(''); list.querySelectorAll('.alert-dismiss').forEach(btn => { btn.addEventListener('click', async () => { const id = (btn as HTMLElement).dataset.id; if (id) { await browser.runtime.sendMessage({ type: 'DISMISS_ALERT', payload: { id } }); loadAlerts(s); } }); }); }
 
     function esc(s: string) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
@@ -907,7 +941,7 @@ export default defineContentScript({
 
     function getHTML(): string {
       const badge = getBadge();
-      const customerCard = isVinSolutions ? `<div id="o8-card" class="card" style="display:none"><div id="o8-name" class="name"></div><div id="o8-vehicle" class="vehicle"></div><div id="o8-meta" class="meta"></div></div>` : '';
+      const customerCard = isVinSolutions ? `<div id="o8-card" class="card"><div id="o8-name" class="name" style="font-style:italic;color:#94a3b8">Open a customer record</div><div id="o8-vehicle" class="vehicle"></div><div id="o8-meta" class="meta"></div></div>` : '';
       const placeholder = isVinSolutions ? 'Describe the situation or tap the mic...' : isGmail ? 'Describe the email situation...' : isFacebook ? 'Describe the conversation...' : isLinkedIn ? 'Describe the LinkedIn interaction...' : isInstagram ? 'Describe the DM...' : 'Describe the situation...';
 
       return `
@@ -929,7 +963,7 @@ export default defineContentScript({
       <button id="o8-mic" class="inline-mic" title="Tap to dictate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button>
     </div>
     <button id="o8-generate" class="gen-btn">Generate</button>
-    ${!isVinSolutions ? '<div class="inline-links"><button id="o8-tools-btn-inline" class="link-btn">Tools</button><span class="link-sep">|</span><button id="o8-settings-btn-inline" class="link-btn">Settings</button></div>' : ''}
+    <div class="inline-links"><button id="o8-tools-btn-inline" class="link-btn">Tools</button><span class="link-sep">|</span><button id="o8-settings-btn-inline" class="link-btn">Settings</button></div>
   </div>
   <div id="o8-outputs" class="outputs"></div>
 </div>
@@ -1006,9 +1040,9 @@ export default defineContentScript({
 .ctx-dropzone { border:2px dashed #7F77DD; border-radius:8px; background:#F0EFFF; padding:16px; text-align:center; font-size:11px; color:#7F77DD; display:flex; align-items:center; justify-content:center; min-height:60px; cursor:pointer; } .ctx-dropzone.dragover { background:#e8e4ff; }
 .ctx-preview { position:relative; text-align:center; margin-bottom:8px; } .ctx-img { max-width:180px; max-height:100px; border-radius:6px; border:1px solid #e2e8f0; } .ctx-remove { position:absolute; top:-6px; right:calc(50% - 96px); width:18px; height:18px; border-radius:50%; background:#FF3B30; color:#fff; border:none; font-size:11px; cursor:pointer; }
 .alert-item { display:flex; align-items:center; padding:6px 8px; background:#FFF7ED; border:1px solid #FBBF24; border-radius:6px; margin-bottom:4px; font-size:11px; gap:6px; } .alert-time { font-size:10px; color:#92400E; margin-left:auto; } .alert-dismiss { background:none; border:none; color:#94a3b8; cursor:pointer; font-size:14px; }
-.sidebar-footer { padding:8px 14px; border-top:1px solid #e8eaed; display:flex; align-items:center; gap:8px; flex-shrink:0; flex-wrap:wrap; }
-.tools-btn { background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:4px 10px; font-size:11px; font-weight:600; color:#64748b; cursor:pointer; font-family:inherit; } .tools-btn:hover { background:#F0EFFF; color:#7F77DD; border-color:#7F77DD; }
-.tcpa { width:100%; font-size:9px; color:#9CA3AF; line-height:1.3; margin-top:4px; }
+.sidebar-footer { position:sticky; bottom:0; padding:8px 16px; border-top:1px solid #2a2a3e; display:flex; align-items:center; gap:12px; flex-shrink:0; flex-wrap:wrap; background:#1a1a2e; z-index:10; }
+.tools-btn { background:rgba(127,119,221,0.15); border:1px solid rgba(127,119,221,0.3); border-radius:6px; padding:4px 10px; font-size:11px; font-weight:600; color:#c4c0f0; cursor:pointer; font-family:inherit; } .tools-btn:hover { background:rgba(127,119,221,0.3); color:#fff; border-color:#7F77DD; }
+.tcpa { width:100%; font-size:9px; color:#6b6b8a; line-height:1.3; margin-top:4px; }
 /* Settings */
 .settings-section { padding:16px 14px; } .settings-label { font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; margin-top:12px; }
 .settings-options { display:flex; flex-direction:column; gap:6px; position:relative; } .settings-options label { font-size:12px; color:#1a202c; display:flex; align-items:center; gap:6px; } .settings-options input[type="radio"] { accent-color:#7F77DD; }
