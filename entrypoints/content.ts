@@ -233,8 +233,41 @@ export default defineContentScript({
 
     console.log(`[Floq] Injection proceeding — platform: ${PLATFORM}, isTop: ${window === window.top}`);
 
-    // ===== VINSOLUTIONS SCANNING (top frame only) =====
+    // ===== VINSOLUTIONS SCANNING (top frame only, scoped to Customer Dashboard panel) =====
     if (isVinSolutions) {
+      // Find the Customer Dashboard panel element and return ONLY its text
+      function findDashboardText(): string {
+        // Search all elements for one containing "Customer Dashboard" heading text
+        const allEls = document.querySelectorAll('*');
+        for (const el of allEls) {
+          // Look for the element whose own text (not children) says "Customer Dashboard"
+          if (el.childNodes.length <= 3) {
+            const ownText = Array.from(el.childNodes).filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            if (/Customer Dashboard/i.test(ownText)) {
+              // Walk up to find the panel container (usually a parent div with substantial content)
+              let panel: HTMLElement = el as HTMLElement;
+              for (let i = 0; i < 5; i++) {
+                if (panel.parentElement && panel.parentElement.offsetHeight > 200) { panel = panel.parentElement; break; }
+                if (panel.parentElement) panel = panel.parentElement;
+              }
+              return panel.innerText || '';
+            }
+          }
+        }
+        // Also check iframes for Customer Dashboard content
+        const iframes = document.querySelectorAll('iframe');
+        for (const iframe of iframes) {
+          try {
+            const doc = iframe.contentDocument || (iframe as any).contentWindow?.document;
+            if (!doc?.body) continue;
+            const text = doc.body.innerText || '';
+            if (/Customer Dashboard/i.test(text)) return text;
+          } catch(e) {}
+        }
+        return '';
+      }
+
+      // Fallback: gather all text from page + iframes (used for vehicle extraction)
       function gatherAllText(): string {
         let text = document.body?.innerText || '';
         const iframes = document.querySelectorAll('iframe');
@@ -248,25 +281,30 @@ export default defineContentScript({
       }
 
       function attemptScan() {
-        const t = gatherAllText();
-        if (t.length < 50) return;
-        const s = scanText(t);
+        // Scan ONLY the Customer Dashboard panel for name/phone/email
+        const dashText = findDashboardText();
+        if (!dashText || dashText.length < 30) return;
+        const s = scanText(dashText);
+        // Vehicle can come from dashboard or broader page context
+        if (!s.vehicle) {
+          const allText = gatherAllText();
+          s.vehicle = extractVehicle(allText) || null;
+        }
         if (s.customerName) browser.storage.local.set({ oper8er_lead: s, oper8er_lead_time: Date.now() });
-        const v = extractVehicle(t);
-        if (v) browser.storage.local.set({ oper8er_vehicle_info: v, oper8er_vehicle_info_time: Date.now() });
+        if (s.vehicle) browser.storage.local.set({ oper8er_vehicle_info: s.vehicle, oper8er_vehicle_info_time: Date.now() });
       }
       attemptScan();
       let lastScannedName = '';
       setInterval(() => {
-        const t = gatherAllText();
-        const nm = t.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || t.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
+        const dashText = findDashboardText();
+        const nm = dashText.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || dashText.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
         const curName = nm ? nm[1].trim() : '';
         if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
       }, 2000);
 
       const vinObserver = new MutationObserver(() => {
-        const t = gatherAllText();
-        const nm = t.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || t.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
+        const dashText = findDashboardText();
+        const nm = dashText.match(/Customer Dashboard\s*\n([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+)/) || dashText.match(/([A-Z][a-zA-Z'-]+ [A-Z][a-zA-Z'-]+(?:\s[A-Z][a-zA-Z'-]+)?)\s*\n\s*\((?:Individual|Business)\)/);
         const curName = nm ? nm[1].trim() : '';
         if (curName && curName !== lastScannedName) { lastScannedName = curName; attemptScan(); }
       });
@@ -286,7 +324,6 @@ export default defineContentScript({
     // ===== SIDEBAR WIDTH PER PLATFORM =====
     function getSidebarWidth(): string {
       if (isGmail || isInstagram) return '280px';
-      if (isVinSolutions) return '320px';
       return '300px';
     }
 
@@ -481,11 +518,11 @@ export default defineContentScript({
         // Cross-platform compact: right side, auto height
         Object.assign(host.style, { position:'fixed', top:'0', right:'0', width: w, height:'auto', maxHeight:'100vh', zIndex:'2147483647' });
       } else {
-        // VinSolutions: fixed panel on right side
+        // VinSolutions: fixed panel on right side, 300px
         Object.assign(host.style, {
           position:'fixed', right:'0', top:'0',
-          width:'320px', height:'100vh',
-          zIndex:'999999',
+          width:'300px', height:'100vh',
+          zIndex:'2147483647',
           boxShadow:'-4px 0 16px rgba(0,0,0,0.12)',
           overflowY:'hidden', overflowX:'hidden'
         });
@@ -644,8 +681,15 @@ export default defineContentScript({
       if (isVinSolutions) updateSidebar();
     }
 
-    function pushContent(_open: boolean) {
-      // Sidebar is a fixed overlay — no margin push needed
+    function pushContent(open: boolean) {
+      if (!isVinSolutions) return;
+      const main = document.querySelector('#mainAreaPanel') as HTMLElement
+        || document.querySelector('.main-content') as HTMLElement
+        || document.querySelector('#page-content') as HTMLElement;
+      if (main) {
+        main.style.marginRight = open ? '300px' : '';
+        main.style.transition = 'margin-right 0.2s';
+      }
     }
 
     function closeSidebar() {
@@ -976,7 +1020,7 @@ export default defineContentScript({
       return `
 * { margin:0; padding:0; box-sizing:border-box; }
 :host { all:initial; font-family:system-ui,-apple-system,sans-serif; font-size:13px; color:#1a202c; }
-#o8 { width:${width}; height:${isVinSolutions ? '100vh' : '480px'}; max-height:100vh; background:#fff; border-left:1px solid #e2e8f0; border-right:1px solid #e2e8f0; overflow-y:auto; overscroll-behavior:contain; box-shadow:0 0 16px rgba(0,0,0,0.06); display:flex; flex-direction:column; ${!isVinSolutions ? 'border-radius:0 0 8px 0;' : ''} }
+#o8 { width:${width}; height:${isVinSolutions ? '100vh' : '480px'}; max-height:100vh; background:#fff; border-left:1px solid #e2e8f0; border-right:1px solid #e2e8f0; overflow-y:auto; overscroll-behavior:contain; box-shadow:0 0 16px rgba(0,0,0,0.06); display:flex; flex-direction:column; padding-bottom:${isVinSolutions ? '60px' : '0'}; ${!isVinSolutions ? 'border-radius:0 0 8px 0;' : ''} }
 .header { padding:10px 14px; border-bottom:1px solid #e8eaed; display:flex; align-items:center; gap:8px; flex-shrink:0; }
 .logo { font-size:14px; font-weight:800; color:#7F77DD; letter-spacing:3px; }
 .badge { font-size:9px; font-weight:600; padding:2px 8px; border-radius:10px; text-transform:uppercase; letter-spacing:0.5px; flex:1; text-align:center; }
