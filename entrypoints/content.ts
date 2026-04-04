@@ -1,6 +1,6 @@
 /**
- * Floq v1.7.0 — Pending notes, single-action buttons, platform fixes.
- * All platforms: sidebar on RIGHT, never left. No double injection.
+ * Floq v1.8.1 — Draggable pill, left sidebar for VinSolutions, right for all others.
+ * VinSolutions: sidebar on LEFT, 320px. All other platforms: sidebar on RIGHT.
  * Gmail: collapsed by default, 280px. Instagram DMs + FB Marketplace conversations added.
  * LinkedIn: messaging only. Facebook: messages + marketplace/t only.
  */
