@@ -46,14 +46,16 @@ export default defineContentScript({
   runAt: 'document_idle',
 
   async main() {
-    console.log('[Floq] Content script loaded on', PLATFORM, window.location.href);
-    if (PLATFORM === 'unknown') return;
+    // Re-detect platform inside main() to ensure window.location.href is correct
+    const platform = detectPlatform();
+    console.log('[Floq] Content script loaded on', platform, window.location.href);
+    if (platform === 'unknown') return;
 
-    const isVinSolutions = PLATFORM === 'vinsolutions';
-    const isGmail = PLATFORM === 'gmail';
-    const isFacebook = PLATFORM === 'facebook';
-    const isLinkedIn = PLATFORM === 'linkedin';
-    const isInstagram = PLATFORM === 'instagram';
+    const isVinSolutions = platform === 'vinsolutions';
+    const isGmail = platform === 'gmail';
+    const isFacebook = platform === 'facebook';
+    const isLinkedIn = platform === 'linkedin';
+    const isInstagram = platform === 'instagram';
 
     function getOutputLabels() {
       if (isVinSolutions) return { text: 'TEXT MESSAGE', email: 'EMAIL', crm: 'CRM NOTE' };
