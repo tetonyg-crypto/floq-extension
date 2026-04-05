@@ -46,9 +46,20 @@ export default defineContentScript({
   runAt: 'document_idle',
 
   async main() {
-    // Re-detect platform inside main() to ensure window.location.href is correct
-    const platform = detectPlatform();
-    console.log('[Floq] Content script loaded on', platform, window.location.href);
+    // Detect platform inside main() — must be here, not module scope,
+    // because WXT evaluates module-level code before page context is ready
+    const url = window.location.href;
+    let platform: Platform = 'unknown';
+    if (url.includes('vinsolutions') || url.includes('coxautoinc')) platform = 'vinsolutions';
+    else if (url.includes('mail.google.com')) platform = 'gmail';
+    else if (url.includes('messenger.com')) platform = 'facebook';
+    else if (url.includes('facebook.com/messages')) platform = 'facebook';
+    else if (url.includes('facebook.com/marketplace/t/')) platform = 'facebook';
+    else if (url.includes('linkedin.com/messaging') || url.includes('linkedin.com/in/')) platform = 'linkedin';
+    else if (url.includes('instagram.com/direct')) platform = 'instagram';
+    else if (url.includes('web.whatsapp.com')) platform = 'whatsapp';
+
+    console.log('[Floq] Content script loaded on', platform, url);
     if (platform === 'unknown') return;
 
     const isVinSolutions = platform === 'vinsolutions';
